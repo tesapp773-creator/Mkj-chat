@@ -70,7 +70,7 @@ async function openFollowList(uid,type){
     const u=(await db.ref(`users/${uid2}`).once('value')).val()||{};
     const div=document.createElement('div');div.className='ci';div.style.cssText='border-radius:12px;margin-bottom:6px;cursor:pointer;';
     const following=await isFollowing(uid2);
-    div.innerHTML=`<img src="${esc(u.photoURL||avUrl(u.username||'U'))}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;"><div style="flex:1;"><div style="font-weight:700;color:var(--t1);">${esc(u.username||'User')}</div><div style="font-size:12px;color:var(--blue);">#${esc(u.mkjNumber||'')}</div></div><button onclick="followUser('${uid2}').then(()=>openFollowList('${uid}','${type}'))" style="padding:6px 14px;background:${following?'var(--s2)':'var(--g)'};border-radius:20px;color:${following?'var(--t1)':'#fff'};font-size:13px;font-weight:600;">${following?'Following':'Follow'}</button>`;
+    div.innerHTML=`<img src="${esc(u.photoURL||avUrl(u.username||'U'))}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;"><div style="flex:1;"><div style="font-weight:700;color:var(--t1);">${esc(getDisplayName(uid2,u.username))}</div><div style="font-size:12px;color:var(--blue);">#${esc(u.mkjNumber||'')}</div></div><button onclick="followUser('${uid2}').then(()=>openFollowList('${uid}','${type}'))" style="padding:6px 14px;background:${following?'var(--s2)':'var(--g)'};border-radius:20px;color:${following?'var(--t1)':'#fff'};font-size:13px;font-weight:600;">${following?'Following':'Follow'}</button>`;
     if(list)list.appendChild(div);
   }));
 }
@@ -899,13 +899,13 @@ function renderSpacesParticipants(participants){
     if(p.role==='host'||p.role==='speaker'){
       const tile=document.createElement('div');tile.id=`sptile-${uid}`;
       tile.style.cssText='display:flex;flex-direction:column;align-items:center;gap:4px;';
-      tile.innerHTML=`<div class="sptile-media" style="width:64px;height:64px;border-radius:50%;overflow:hidden;border:2px solid #33E0AC;display:flex;align-items:center;justify-content:center;background:#1F2C34;"><img src="${avUrl(p.username)}" style="width:100%;height:100%;object-fit:cover;"></div><span style="color:#fff;font-size:11px;font-weight:600;">${esc(p.username)}${p.role==='host'?' 👑':''}</span>`;
+      tile.innerHTML=`<div class="sptile-media" style="width:64px;height:64px;border-radius:50%;overflow:hidden;border:2px solid #33E0AC;display:flex;align-items:center;justify-content:center;background:#1F2C34;"><img src="${avUrl(p.username)}" style="width:100%;height:100%;object-fit:cover;"></div><span style="color:#fff;font-size:11px;font-weight:600;">${esc(getDisplayName(uid,p.username))}${p.role==='host'?' 👑':''}</span>`;
       speakersGrid.appendChild(tile);
     }else{
       listenerCount++;
       const tile=document.createElement('div');tile.id=`sptile-${uid}`;
       tile.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;';
-      tile.innerHTML=`<img src="${avUrl(p.username)}" style="width:42px;height:42px;border-radius:50%;object-fit:cover;"><span style="color:rgba(255,255,255,.7);font-size:10px;">${esc(p.username)}</span>`;
+      tile.innerHTML=`<img src="${avUrl(p.username)}" style="width:42px;height:42px;border-radius:50%;object-fit:cover;"><span style="color:rgba(255,255,255,.7);font-size:10px;">${esc(getDisplayName(uid,p.username))}</span>`;
       listenersGrid.appendChild(tile);
       if(p.handRaised)handQueue.push({uid,...p});
     }
@@ -919,7 +919,7 @@ function renderSpacesParticipants(participants){
     handQueue.forEach(p=>{
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;gap:10px;padding:6px 0;';
-      row.innerHTML=`<img src="${avUrl(p.username)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;"><span style="flex:1;color:#EAF6F1;font-size:13px;">${esc(p.username)}</span><button onclick="promoteToSpeaker('${p.uid}')" style="padding:5px 12px;background:#33E0AC;border-radius:14px;color:#0D1512;font-size:11px;font-weight:700;">Bring up</button>`;
+      row.innerHTML=`<img src="${avUrl(p.username)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;"><span style="flex:1;color:#EAF6F1;font-size:13px;">${esc(getDisplayName(p.uid,p.username))}</span><button onclick="promoteToSpeaker('${p.uid}')" style="padding:5px 12px;background:#33E0AC;border-radius:14px;color:#0D1512;font-size:11px;font-weight:700;">Bring up</button>`;
       qlist.appendChild(row);
     });
   }else if(qwrap){
@@ -930,7 +930,7 @@ function renderSpacesParticipants(participants){
     entries.forEach(([uid,p])=>{
       if(p.role==='speaker'){
         const tile=document.getElementById(`sptile-${uid}`);
-        if(tile){tile.style.cursor='pointer';tile.onclick=()=>{if(confirm(`Move ${p.username} back to listening?`))demoteToListener(uid);};}
+        if(tile){tile.style.cursor='pointer';tile.onclick=()=>{if(confirm(`Move ${getDisplayName(uid,p.username)} back to listening?`))demoteToListener(uid);};}
       }
     });
   }

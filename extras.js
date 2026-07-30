@@ -138,7 +138,7 @@ function openNotifCenter(){
           <div style="position:absolute;bottom:-2px;right:-2px;width:20px;height:20px;border-radius:50%;background:var(--s1);display:flex;align-items:center;justify-content:center;font-size:11px;">${t.icon}</div>
         </div>
         <div style="flex:1;min-width:0;">
-          <div style="font-size:14px;color:var(--t1);line-height:1.4;"><strong style="color:${t.color};">${esc(n.fromName||'Someone')}</strong> ${t.text}</div>
+          <div style="font-size:14px;color:var(--t1);line-height:1.4;"><strong style="color:${t.color};">${esc(getDisplayName(n.fromUid,n.fromName)||'Someone')}</strong> ${t.text}</div>
           ${n.preview?`<div style="font-size:12px;color:var(--t2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(n.preview)}</div>`:''}
           <div style="font-size:11px;color:var(--t2);margin-top:3px;">${ago(n.timestamp)}</div>
         </div>

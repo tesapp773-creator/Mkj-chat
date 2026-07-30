@@ -221,11 +221,12 @@ function makeMsgCore(msg,isMe,key,chatType,reactions,searchQ){
   let html='';
   // Sender name + MKJ
   if(!isMe&&msg.username){
+    const senderDisplayName=getDisplayName(msg.uid,msg.username);
     const clr=chatType==='global'?'color:var(--g);cursor:pointer;':'color:var(--g);';
     const click=chatType==='global'?`onclick="openPrivate('${esc(msg.uid)}','${esc(msg.username||'')}','${esc(msg.mkjNumber||'')}','${esc(msg.photoURL||'')}')"`:''
     const crown=(chatType==='global'&&msg.uid===CEO_UID)?'<span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;background:#1d9bf0;border-radius:50%;margin-left:3px;" title="MKJ Verified"><i class="fa-solid fa-check" style="color:#fff;font-size:9px;"></i></span>':'';
     html+=`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;" ${click}>
-      <span style="font-size:12px;font-weight:700;${clr}">${esc(msg.username)}</span>${crown}
+      <span style="font-size:12px;font-weight:700;${clr}">${esc(senderDisplayName)}</span>${crown}
       <span style="font-size:10px;color:var(--blue);">#${esc(msg.mkjNumber||'')}</span>
     </div>`;
   }
@@ -376,10 +377,10 @@ function loadGlobal(){
       const el=makeMsg(msg,msg.uid===me.uid,snap.key,'global',rs.val());
       if(el)c.appendChild(el);scrollBottom('global-msgs');
     });
-    $('g-prev')&&($('g-prev').textContent=(msg.username?msg.username+': ':'')+( msg.text||'[media]'));
+    $('g-prev')&&($('g-prev').textContent=(msg.username?getDisplayName(msg.uid,msg.username)+': ':'')+( msg.text||'[media]'));
     $('g-time')&&($('g-time').textContent=ago(msg.timestamp));
     if(curView!=='global'){gUnread++;[$('g-badge'),$('g-nb')].forEach(b=>{if(b){b.textContent=gUnread;b.classList.remove('hidden');}});}
-    if(msg.uid!==me.uid)sendPush(msg.username||'MKJ Community',msg.text||'[media]',msg.photoURL);
+    if(msg.uid!==me.uid)sendPush(getDisplayName(msg.uid,msg.username)||'MKJ Community',msg.text||'[media]',msg.photoURL);
   });
   db.ref('reactions/global').on('child_changed',snap=>{
     const el=$('global-msgs')?.querySelector(`[data-key="${snap.key}"]`);
@@ -434,11 +435,26 @@ function openContactsList(){
   }else{
     entries.sort((a,b)=>(a[1].savedName||'').localeCompare(b[1].savedName||'')).forEach(([uid,c])=>{
       const row=document.createElement('div');row.className='ci';row.style.borderRadius='10px';
-      row.innerHTML=`<div style="flex:1;min-width:0;"><div style="font-weight:600;color:var(--t1);font-size:14px;">${esc(c.savedName)}</div><div style="font-size:12px;color:var(--t2);">${esc(c.username||'')}</div></div>`;
+      const infoDiv=document.createElement('div');infoDiv.style.cssText='flex:1;min-width:0;cursor:pointer;';
+      infoDiv.innerHTML=`<div style="font-weight:600;color:var(--t1);font-size:14px;">${esc(c.savedName)}</div><div style="font-size:12px;color:var(--t2);">${esc(c.username||'')}</div>`;
+      infoDiv.onclick=async()=>{
+        closeModal('contacts-modal');
+        // Fetch their current profile (mkj number, photo) so the chat header isn't blank on first open
+        try{
+          const s=await db.ref(`users/${uid}`).once('value');
+          const u=s.val()||{};
+          openPrivate(uid,c.username||u.username||'',u.mkjNumber||'',u.photoURL||'');
+        }catch(e){
+          openPrivate(uid,c.username||'','','');
+        }
+      };
+      row.appendChild(infoDiv);
+      const chatIcon=document.createElement('i');chatIcon.className='fa-solid fa-message';chatIcon.style.cssText='color:var(--g);font-size:14px;padding:6px 4px;';
+      row.appendChild(chatIcon);
       const editBtn=document.createElement('button');editBtn.style.cssText='color:var(--t2);font-size:14px;padding:6px 10px;';editBtn.innerHTML='<i class="fa-solid fa-pen"></i>';
-      editBtn.onclick=()=>saveContactPrompt(uid,c.username).then(()=>openContactsList());
+      editBtn.onclick=(e)=>{e.stopPropagation();saveContactPrompt(uid,c.username).then(()=>openContactsList());};
       const delBtn=document.createElement('button');delBtn.style.cssText='color:#ef4444;font-size:14px;padding:6px 10px;';delBtn.innerHTML='<i class="fa-solid fa-trash"></i>';
-      delBtn.onclick=()=>removeContact(uid).then(()=>openContactsList());
+      delBtn.onclick=(e)=>{e.stopPropagation();removeContact(uid).then(()=>openContactsList());};
       row.appendChild(editBtn);row.appendChild(delBtn);
       list.appendChild(row);
     });
@@ -536,7 +552,7 @@ function openPrivate(uid,name,mkj,photo){
   if(_onlineLRef){_onlineLRef.off('value');_onlineLRef=null;}
   chatId=[me.uid,uid].sort().join('_');
   chatTarget={uid,username:name,mkjNumber:mkj,photoURL:photo};
-  $('p-av').src=photo||avUrl(name);$('p-name').textContent=name||'Unknown';
+  $('p-av').src=photo||avUrl(name);$('p-name').textContent=getDisplayName(uid,name);
   const pSub=$('p-sub');pSub.textContent=mkj?`#${mkj}`:'';delete pSub.dataset.original;
   closeSearch();closeModal('search-modal');showView('private');applyWallpaper('private');
   const savedBg=localStorage.getItem(`bg_${chatId}`);if(savedBg)$('priv-msgs').style.background=savedBg;
@@ -562,7 +578,7 @@ function loadPrivMsgs(){
     if(msg.uid!==me.uid){
       db.ref(`conversations/${me.uid}/${chatId}`).update({unread:0});
       db.ref(`private_chats/${chatId}/${snap.key}/readBy/${me.uid}`).set(true);
-      if(!isChatMuted())sendPush(msg.username||'MKJ Chat',msg.text||'[media]',msg.photoURL);
+      if(!isChatMuted())sendPush(getDisplayName(msg.uid,msg.username)||'MKJ Chat',msg.text||'[media]',msg.photoURL);
     }
   },err=>{
     console.error('[load] private_chats read failed:',err,'path=private_chats/'+chatId);
@@ -629,8 +645,9 @@ function loadConvs(){
     const pRow=$('pinned-scroll'),pWrap=$('pinned-contacts-row');
     if(pinned.length){pRow.innerHTML='';pWrap.classList.remove('hidden');}else pWrap.classList.add('hidden');
     pinned.forEach(([cid,c])=>{
+      const dName=getDisplayName(c.targetUid,c.targetUsername);
       const av=document.createElement('div');av.className='pin-av';
-      av.innerHTML=`<img src="${esc(c.targetPhoto||avUrl(c.targetUsername))}" class="pin-av-img" onerror="this.src='${avUrl(c.targetUsername)}'">${c.unread>0?`<div class="badge" style="position:absolute;top:0;right:0;min-width:16px;height:16px;font-size:9px;">${c.unread}</div>`:''}<div class="pin-av-name">${esc(c.targetUsername||'')}</div>`;
+      av.innerHTML=`<img src="${esc(c.targetPhoto||avUrl(c.targetUsername))}" class="pin-av-img" onerror="this.src='${avUrl(c.targetUsername)}'">${c.unread>0?`<div class="badge" style="position:absolute;top:0;right:0;min-width:16px;height:16px;font-size:9px;">${c.unread}</div>`:''}<div class="pin-av-name">${esc(dName)}</div>`;
       av.style.position='relative';
       av.onclick=()=>openPrivate(c.targetUid,c.targetUsername,c.targetMKJ||'',c.targetPhoto||'');
       pRow.appendChild(av);
@@ -644,7 +661,8 @@ function loadConvs(){
       const isArchived=c.archived===true;
       const pinned=getPinnedChats();const isPinnedChat=pinned.includes(cid);
       const div=document.createElement('div');div.className='ci';
-      div.dataset.name=(c.targetUsername||'').toLowerCase();
+      const dName=getDisplayName(c.targetUid,c.targetUsername);
+      div.dataset.name=(dName||'').toLowerCase();
       div.dataset.mkj=(c.targetMKJ||'').toLowerCase();
       div.dataset.cid=cid;
       div.dataset.unread=c.unread||0;
@@ -659,7 +677,7 @@ function loadConvs(){
         </div>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;">${esc(c.targetUsername||'Unknown')}${isBlocked?' 🚫':''}${isMuted?' 🔇':''}</span>
+            <span style="font-weight:600;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;">${esc(dName||'Unknown')}${isBlocked?' 🚫':''}${isMuted?' 🔇':''}</span>
             <span style="font-size:11px;color:${c.unread>0?'var(--g)':'var(--t2)'};">${ago(c.timestamp)}</span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
@@ -737,8 +755,8 @@ function loadGroupMsgs(){
       if(el)c.appendChild(el);scrollBottom('group-msgs');
     });
     if(msg.uid!==me.uid){
-      if(msg.text?.includes(`@${me.username}`))sendPush(`${msg.username} mentioned you`,msg.text,msg.photoURL);
-      else sendPush(`${msg.username||'MKJ'} in ${curGData?.name||'Group'}`,msg.text||'[media]',msg.photoURL);
+      if(msg.text?.includes(`@${me.username}`))sendPush(`${getDisplayName(msg.uid,msg.username)} mentioned you`,msg.text,msg.photoURL);
+      else sendPush(`${getDisplayName(msg.uid,msg.username)||'MKJ'} in ${curGData?.name||'Group'}`,msg.text||'[media]',msg.photoURL);
     }
   });
   db.ref(`group_messages/${curGid}`).orderByChild('timestamp').limitToFirst(1).once('value',snap=>{
@@ -838,7 +856,7 @@ function openGroupInfo(){
         actions+=`<button onclick="if(confirm('Remove member?'))db.ref('groups/${curGid}/members/${uid}').remove().then(()=>openGroupInfo())" style="font-size:11px;padding:3px 8px;border-radius:8px;background:rgba(239,68,68,.15);color:var(--red);margin-left:4px;">Remove</button>`;
       }
       div.innerHTML=`<img src="${esc(u.photoURL||avUrl(u.username))}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;">
-        <div style="flex:1;min-width:0;"><div style="color:var(--t1);font-weight:600;font-size:14px;">${esc(u.username||'User')} ${muted[uid]?'🔇':''}</div><div style="font-size:11px;color:var(--blue);">#${esc(u.mkjNumber||'')}</div></div>
+        <div style="flex:1;min-width:0;"><div style="color:var(--t1);font-weight:600;font-size:14px;">${esc(getDisplayName(uid,u.username))} ${muted[uid]?'🔇':''}</div><div style="font-size:11px;color:var(--blue);">#${esc(u.mkjNumber||'')}</div></div>
         ${roleBadge}${actions}`;
       c.appendChild(div);
     });
@@ -987,7 +1005,7 @@ function makeChannelPost(msg,key,reactions){
   wrap.style.cssText='margin:8px 12px;background:var(--s1);border-radius:14px;padding:12px;';
   let html=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
     <img src="${esc(msg.photoURL||avUrl(msg.username||'C'))}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
-    <div><div style="font-size:13px;font-weight:700;color:var(--g);">${esc(msg.username||'')} 👑</div>
+    <div><div style="font-size:13px;font-weight:700;color:var(--g);">${esc(getDisplayName(msg.uid,msg.username))} 👑</div>
     <div style="font-size:10px;color:var(--t2);">${esc(msg.time||'')}</div></div></div>`;
   if(msg.type==='image')html+=`<img src="${esc(msg.url)}" style="width:100%;border-radius:10px;margin-bottom:8px;" loading="lazy" onclick="window.open('${esc(msg.url)}','_blank')">`;
   else if(msg.type==='video')html+=`<video controls style="width:100%;border-radius:10px;margin-bottom:8px;"><source src="${esc(msg.url)}"></video>`;

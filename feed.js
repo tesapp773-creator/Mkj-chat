@@ -144,7 +144,7 @@ function buildFeedPost(p){
   const bottomLeft=`<div style="position:absolute;bottom:76px;left:14px;right:80px;z-index:2;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;" onclick="viewUserProfile('${esc(p.uid)}')">
       <img src="${esc(p.photoURL||avUrl(p.username||'U'))}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;border:2px solid #fff;">
-      <div><div style="font-weight:700;color:#fff;font-size:14px;display:flex;align-items:center;">${esc(p.username||'User')}${vbadge}</div><div style="font-size:11px;color:rgba(255,255,255,.7);">${esc(p.time||'')}</div></div>
+      <div><div style="font-weight:700;color:#fff;font-size:14px;display:flex;align-items:center;">${esc(getDisplayName(p.uid,p.username))}${vbadge}</div><div style="font-size:11px;color:rgba(255,255,255,.7);">${esc(p.time||'')}</div></div>
     </div>
     ${p.text&&(p.imageURL||p.videoURL)?`<div style="color:#fff;font-size:14px;line-height:1.5;text-shadow:0 1px 3px rgba(0,0,0,.8);">${esc(p.text.substring(0,120))}${p.text.length>120?'…':''}</div>`:''}
     <div style="margin-top:6px;display:flex;align-items:center;gap:6px;">
@@ -281,7 +281,7 @@ function openFeedComments(postKey){
     entries.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0)).forEach(c=>{
       const d=document.createElement('div');d.className='feed-comment-item';
       d.innerHTML=`<img src="${esc(c.photoURL||avUrl(c.username||'U'))}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;">
-        <div style="flex:1;"><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;"><span style="font-size:13px;font-weight:700;color:var(--g);">${esc(c.username||'User')}</span><span style="font-size:10px;color:var(--t2);">${ago(c.timestamp)}</span></div><div style="font-size:14px;color:var(--t1);line-height:1.4;">${esc(c.text||'')}</div></div>`;
+        <div style="flex:1;"><div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;"><span style="font-size:13px;font-weight:700;color:var(--g);">${esc(getDisplayName(c.uid,c.username))}</span><span style="font-size:10px;color:var(--t2);">${ago(c.timestamp)}</span></div><div style="font-size:14px;color:var(--t1);line-height:1.4;">${esc(c.text||'')}</div></div>`;
       list.appendChild(d);
     });
   });
@@ -614,7 +614,7 @@ async function loadReactLeaderboard(){
   list.innerHTML='';const medals=['🥇','🥈','🥉'];
   sorted.forEach(([uid,count],i)=>{
     const row=document.createElement('div');row.className='leaderboard-row';
-    row.innerHTML=`<span style="font-size:22px;width:32px;">${medals[i]||i+1}</span><img src="${esc(userPhotos[uid]||avUrl(userNames[uid]))}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;"><div style="flex:1;"><div style="color:var(--t1);font-weight:600;">${esc(userNames[uid])}</div><div style="font-size:12px;color:var(--t2);">${count} reactions received</div></div>${uid===me?.uid?'<span style="font-size:11px;color:var(--g);padding:2px 8px;background:rgba(0,168,132,.1);border-radius:10px;">You</span>':''}`;
+    row.innerHTML=`<span style="font-size:22px;width:32px;">${medals[i]||i+1}</span><img src="${esc(userPhotos[uid]||avUrl(userNames[uid]))}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;"><div style="flex:1;"><div style="color:var(--t1);font-weight:600;">${esc(getDisplayName(uid,userNames[uid]))}</div><div style="font-size:12px;color:var(--t2);">${count} reactions received</div></div>${uid===me?.uid?'<span style="font-size:11px;color:var(--g);padding:2px 8px;background:rgba(0,168,132,.1);border-radius:10px;">You</span>':''}`;
     list.appendChild(row);
   });
   if(!sorted.length)list.innerHTML='<div style="text-align:center;padding:20px;color:var(--t2);">No reaction data yet</div>';

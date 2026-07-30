@@ -238,7 +238,7 @@ async function searchMKJ(){
       recordProfileView(uid);
       const div=document.createElement('div');div.style.cssText='display:flex;align-items:center;gap:12px;padding:14px;background:var(--s2);border-radius:14px;cursor:pointer;';
       div.innerHTML=`<img src="${esc(u.photoURL||avUrl(u.username))}" style="width:52px;height:52px;border-radius:50%;object-fit:cover;flex-shrink:0;">
-        <div style="flex:1;min-width:0;"><div style="font-weight:700;color:var(--t1);font-size:16px;">${esc(u.username||'Unknown')}</div>
+        <div style="flex:1;min-width:0;"><div style="font-weight:700;color:var(--t1);font-size:16px;">${esc(getDisplayName(uid,u.username))}</div>
         <div style="font-size:12px;color:var(--blue);margin-top:2px;">#${esc(u.mkjNumber||'')}</div>
         <div style="font-size:12px;color:var(--t2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(u.bio||'')}</div></div>
         <button style="padding:9px 16px;background:var(--g);border-radius:10px;color:#fff;font-weight:700;font-size:13px;flex-shrink:0;">Chat</button>`;
