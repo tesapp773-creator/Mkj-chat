@@ -289,12 +289,15 @@ async function loadExplore(tab){
 // ══════════════════════════════════════════════════════════════════
 // FEATURE 4: WATCH PARTY (YouTube sync via Firebase)
 // ══════════════════════════════════════════════════════════════════
-// ══ WATCH PARTY — private, invite-only rooms per friend group ══════
+// ══ WATCH PARTY — private/public, invite-only or open rooms per friend group ══
 let _wpChatRef=null;let _wpActive=false;let currentPartyId=null;
 let wpPlayer=null;let _wpApplyingRemote=false;let _wpCurrentYtId=null;let _wpVideoListenerRef=null;let _wpPlaybackListenerRef=null;let _wpSyncInterval=null;
 let _wpApiLoadPromise=null;
 let _wpInviteMode='create'; // 'create' (new party) or 'invite-more' (adding people to an existing one)
+let _wpVisibility='private'; // 'private' or 'public' — only relevant while creating
+let _wpPlayerReady=false;let _wpPlayerReadyResolve=null;let _wpPlayerReadyPromise=null;
 const WP_STALE_MS=30*60*1000; // a party with no activity for 30 minutes is treated as closed
+const WP_VOICE_MAX_SEC=20; // keep watch-party voice notes short so a busy chat stays readable
 
 function loadYTApi(){
   if(window.YT&&window.YT.Player)return Promise.resolve();
@@ -309,7 +312,7 @@ function loadYTApi(){
   return _wpApiLoadPromise;
 }
 
-// ── HUB — list of your parties, pending invites, and create button ──
+// ── HUB — pending invites, your active parties, and open public ones ──
 function openWatchPartyHub(){
   if(!me)return toast('Login required','error');
   openModal('watch-party-hub-modal');
@@ -317,13 +320,17 @@ function openWatchPartyHub(){
 }
 async function loadWatchPartyHub(){
   const pendingCont=$('wp-hub-pending');const activeCont=$('wp-hub-active');const emptyMsg=$('wp-hub-empty');
+  const publicWrap=$('wp-hub-public-wrap');const publicCont=$('wp-hub-public');
   if(!pendingCont||!activeCont)return;
-  pendingCont.innerHTML='';activeCont.innerHTML='';
+  pendingCont.innerHTML='';activeCont.innerHTML='';if(publicCont)publicCont.innerHTML='';
   if(emptyMsg)emptyMsg.classList.add('hidden');
+  if(publicWrap)publicWrap.classList.add('hidden');
+
   const idxSnap=await db.ref(`user_watch_parties/${me.uid}`).once('value');
   const partyIds=Object.keys(idxSnap.val()||{});
-  if(!partyIds.length){if(emptyMsg)emptyMsg.classList.remove('hidden');return;}
   let anyShown=false;
+  const myAcceptedIds=new Set();
+
   for(const partyId of partyIds){
     try{
       const [partySnap,inviteSnap]=await Promise.all([
@@ -335,7 +342,6 @@ async function loadWatchPartyHub(){
       const lastActive=party.lastActivityAt||party.createdAt||0;
       const isStale=(Date.now()-lastActive)>WP_STALE_MS;
       if(isStale){
-        // Quietly drop our own reference to a closed party — doesn't need to block the list rendering
         db.ref(`user_watch_parties/${me.uid}/${partyId}`).remove();
         continue;
       }
@@ -351,22 +357,56 @@ async function loadWatchPartyHub(){
         row.querySelector('[data-decline]').onclick=()=>declineWatchPartyInvite(partyId);
         pendingCont.appendChild(row);
       }else if(myInvite.status==='accepted'){
+        myAcceptedIds.add(partyId);
         const row=document.createElement('div');row.className='ci';row.style.cursor='pointer';
-        row.innerHTML=`<div style="width:44px;height:44px;border-radius:12px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;">🎬</div>
+        row.innerHTML=`<div style="width:44px;height:44px;border-radius:12px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;">${party.visibility==='public'?'🌍':'🎬'}</div>
           <div style="flex:1;min-width:0;"><div style="font-weight:600;color:var(--t1);font-size:14px;">${esc(getDisplayName(party.createdBy,party.createdByName))}'s Watch Party</div><div style="font-size:12px;color:var(--t2);">Tap to join</div></div>`;
         row.onclick=()=>{closeModal('watch-party-hub-modal');joinWatchParty(partyId);};
         activeCont.appendChild(row);
       }
     }catch(e){ /* couldn't load this one — skip it rather than break the whole list */ }
   }
+
+  // Public parties — open to everyone, joinable directly without an invite
+  try{
+    const pubSnap=await db.ref('public_watch_parties').once('value');
+    const pubIds=Object.keys(pubSnap.val()||{});
+    if(pubIds.length&&publicWrap&&publicCont){
+      let anyPublicShown=false;
+      for(const partyId of pubIds){
+        if(myAcceptedIds.has(partyId))continue; // already shown above, don't duplicate
+        try{
+          const [partySnap,viewersSnap]=await Promise.all([
+            db.ref(`watch_parties/${partyId}`).once('value'),
+            db.ref(`watch_parties/${partyId}/viewers`).once('value')
+          ]);
+          const party=partySnap.val();
+          if(!party)continue;
+          const lastActive=party.lastActivityAt||party.createdAt||0;
+          if((Date.now()-lastActive)>WP_STALE_MS){db.ref(`public_watch_parties/${partyId}`).remove();continue;}
+          const viewerCount=Object.keys(viewersSnap.val()||{}).length;
+          anyPublicShown=true;anyShown=true;
+          const row=document.createElement('div');row.className='ci';row.style.cursor='pointer';
+          row.innerHTML=`<div style="width:44px;height:44px;border-radius:12px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;">🌍</div>
+            <div style="flex:1;min-width:0;"><div style="font-weight:600;color:var(--t1);font-size:14px;">${esc(getDisplayName(party.createdBy,party.createdByName))}'s Watch Party</div><div style="font-size:12px;color:var(--g);">🎬 ${viewerCount} watching now</div></div>`;
+          row.onclick=()=>{closeModal('watch-party-hub-modal');joinWatchParty(partyId);};
+          publicCont.appendChild(row);
+        }catch(e){}
+      }
+      if(anyPublicShown)publicWrap.classList.remove('hidden');
+    }
+  }catch(e){}
+
   if(!anyShown&&emptyMsg)emptyMsg.classList.remove('hidden');
 }
 
 // ── CREATE / INVITE (shared contact picker) ─────────────────────
 function createWatchPartyStart(){
   if(!me)return toast('Login required','error');
-  _wpInviteMode='create';
+  _wpInviteMode='create';_wpVisibility='private';
   const title=$('wp-invite-title');if(title)title.textContent='Create Watch Party';
+  const visPicker=$('wp-visibility-picker');if(visPicker)visPicker.classList.remove('hidden');
+  updateWpVisibilityButtons();
   buildWatchPartyInviteList();
   openModal('wp-invite-modal');
 }
@@ -374,8 +414,33 @@ function inviteMoreToWatchParty(){
   if(!currentPartyId)return;
   _wpInviteMode='invite-more';
   const title=$('wp-invite-title');if(title)title.textContent='Invite More People';
+  const visPicker=$('wp-visibility-picker');if(visPicker)visPicker.classList.add('hidden');
+  // Step the room aside while the invite picker is open — both share the same
+  // visual layer, and the room (opened first) would otherwise sit on top of
+  // the picker and hide it completely, making "Invite More" look broken.
+  const room=$('watch-party-modal');if(room)room.classList.add('hidden');
   buildWatchPartyInviteList();
   openModal('wp-invite-modal');
+}
+function closeWpInviteModal(){
+  closeModal('wp-invite-modal');
+  if(_wpInviteMode==='invite-more'&&currentPartyId){
+    const room=$('watch-party-modal');if(room)room.classList.remove('hidden'); // come back to the room
+  }
+}
+function setWpVisibility(mode){
+  _wpVisibility=mode;
+  updateWpVisibilityButtons();
+}
+function updateWpVisibilityButtons(){
+  const priv=$('wp-vis-private');const pub=$('wp-vis-public');
+  if(!priv||!pub)return;
+  priv.style.background=_wpVisibility==='private'?'rgba(0,168,132,.15)':'var(--s2)';
+  priv.style.color=_wpVisibility==='private'?'var(--g)':'var(--t1)';
+  priv.style.border=_wpVisibility==='private'?'1px solid var(--g)':'none';
+  pub.style.background=_wpVisibility==='public'?'rgba(0,168,132,.15)':'var(--s2)';
+  pub.style.color=_wpVisibility==='public'?'var(--g)':'var(--t1)';
+  pub.style.border=_wpVisibility==='public'?'1px solid var(--g)':'none';
 }
 function buildWatchPartyInviteList(){
   const list=$('wp-invite-list');if(!list)return;
@@ -397,26 +462,29 @@ function buildWatchPartyInviteList(){
 }
 async function confirmWatchPartyInvite(){
   const checked=Array.from(document.querySelectorAll('.wp-invite-cb:checked')).map(cb=>cb.dataset.uid);
-  if(!checked.length)return toast('Pick at least one person to invite','error');
+  const creatingPublic=_wpInviteMode==='create'&&_wpVisibility==='public';
+  if(!checked.length&&!creatingPublic)return toast('Pick at least one person to invite','error');
+  const wasInviteMore=_wpInviteMode==='invite-more';
   closeModal('wp-invite-modal');
   if(_wpInviteMode==='create'){
-    await createWatchPartyWithInvites(checked);
+    await createWatchPartyWithInvites(checked,_wpVisibility);
   }else{
-    await sendWatchPartyInvites(currentPartyId,checked);
-    toast('Invites sent 🎬','success');
+    if(checked.length){await sendWatchPartyInvites(currentPartyId,checked);toast('Invites sent 🎬','success');}
+    if(wasInviteMore&&currentPartyId){const room=$('watch-party-modal');if(room)room.classList.remove('hidden');}
   }
 }
-async function createWatchPartyWithInvites(inviteeUids){
+async function createWatchPartyWithInvites(inviteeUids,visibility){
   if(!me)return;
   const partyRef=db.ref('watch_parties').push();
   const partyId=partyRef.key;
   const now=Date.now();
-  await partyRef.set({createdBy:me.uid,createdByName:me.username,createdAt:now,lastActivityAt:now});
+  await partyRef.set({createdBy:me.uid,createdByName:me.username,createdAt:now,lastActivityAt:now,visibility:visibility||'private'});
   // Creator is auto-accepted into their own party
   await db.ref(`watch_parties/${partyId}/invites/${me.uid}`).set({username:me.username,photoURL:me.photoURL||'',status:'accepted',invitedBy:me.uid,invitedByName:me.username,timestamp:now});
   await db.ref(`user_watch_parties/${me.uid}/${partyId}`).set(true);
-  await sendWatchPartyInvites(partyId,inviteeUids);
-  toast('Watch Party created 🎬','success');
+  if(visibility==='public')await db.ref(`public_watch_parties/${partyId}`).set(true);
+  if(inviteeUids.length)await sendWatchPartyInvites(partyId,inviteeUids);
+  toast(visibility==='public'?'Public Watch Party created 🌍':'Watch Party created 🎬','success');
   joinWatchParty(partyId);
 }
 async function sendWatchPartyInvites(partyId,inviteeUids){
@@ -424,11 +492,13 @@ async function sendWatchPartyInvites(partyId,inviteeUids){
   const now=Date.now();
   for(const uid of inviteeUids){
     const c=_contacts[uid]||{};
+    // Being invited always means an accept step — even for a Public party,
+    // being personally invited is different from someone freely joining a
+    // public room themselves, which needs no invite at all.
     await db.ref(`watch_parties/${partyId}/invites/${uid}`).set({username:c.username||'',photoURL:'',status:'pending',invitedBy:me.uid,invitedByName:me.username,timestamp:now});
     await db.ref(`user_watch_parties/${uid}/${partyId}`).set(true);
     db.ref(`notifications/${uid}`).push({type:'watch_party',fromUid:me.uid,fromName:me.username,fromPhoto:me.photoURL||'',partyId,timestamp:now});
   }
-  // Bump activity so the party doesn't immediately look stale right after inviting more people
   db.ref(`watch_parties/${partyId}/lastActivityAt`).set(now);
 }
 async function acceptWatchPartyInvite(partyId){
@@ -467,31 +537,41 @@ async function initWatchParty(){
 
   await loadYTApi();
   if(!wpPlayer){
+    _wpPlayerReady=false;
+    _wpPlayerReadyPromise=new Promise(resolve=>{_wpPlayerReadyResolve=resolve;});
     wpPlayer=new YT.Player('wp-yt-target',{
       playerVars:{playsinline:1,rel:0},
       events:{
-        onReady:()=>{},
+        onReady:()=>{_wpPlayerReady=true;if(_wpPlayerReadyResolve)_wpPlayerReadyResolve();},
         onStateChange:(e)=>wpOnPlayerStateChange(e),
       }
     });
+  }else if(!_wpPlayerReadyPromise){
+    // Reusing a player instance from a previous room this session — already ready
+    _wpPlayerReady=true;_wpPlayerReadyPromise=Promise.resolve();
   }
 
   // Watch for a new video being loaded by anyone in this room
-  _wpVideoListenerRef=db.ref(`watch_parties/${partyId}/video`).on('value',snap=>{
+  _wpVideoListenerRef=db.ref(`watch_parties/${partyId}/video`).on('value',async snap=>{
     const v=snap.val();if(!v||!v.url)return;
     const ytId=extractYTId(v.url);
     if(!ytId||ytId===_wpCurrentYtId)return;
     _wpCurrentYtId=ytId;
+    const loading=$('wp-loading');if(loading)loading.style.display='flex';
+    await _wpPlayerReadyPromise; // wait for the player to actually finish waking up before handing it a video
+    if(currentPartyId!==partyId)return; // left while waiting
     const ph=$('wp-yt-placeholder');if(ph)ph.style.display='none';
     _wpApplyingRemote=true;
     wpPlayer.loadVideoById(ytId);
-    setTimeout(()=>{_wpApplyingRemote=false;},1200);
+    setTimeout(()=>{_wpApplyingRemote=false;const l=$('wp-loading');if(l)l.style.display='none';},1200);
   });
 
   // Watch the shared play/pause/seek state and mirror it locally
-  _wpPlaybackListenerRef=db.ref(`watch_parties/${partyId}/playback`).on('value',snap=>{
-    const p=snap.val();if(!p||!wpPlayer||typeof wpPlayer.seekTo!=='function')return;
+  _wpPlaybackListenerRef=db.ref(`watch_parties/${partyId}/playback`).on('value',async snap=>{
+    const p=snap.val();if(!p)return;
     if(p.updatedBy===me.uid)return; // don't react to our own broadcast
+    await _wpPlayerReadyPromise;
+    if(currentPartyId!==partyId||!wpPlayer||typeof wpPlayer.seekTo!=='function')return;
     const elapsed=p.state==='playing'?(Date.now()-p.updatedAt)/1000:0;
     const targetTime=(p.time||0)+elapsed;
     _wpApplyingRemote=true;
@@ -502,7 +582,7 @@ async function initWatchParty(){
 
   // Periodic drift correction — every 5s, nudge back in sync if more than 2s off
   _wpSyncInterval=setInterval(()=>{
-    if(!wpPlayer||typeof wpPlayer.getCurrentTime!=='function'||currentPartyId!==partyId)return;
+    if(!_wpPlayerReady||!wpPlayer||typeof wpPlayer.getCurrentTime!=='function'||currentPartyId!==partyId)return;
     db.ref(`watch_parties/${partyId}/playback`).once('value').then(snap=>{
       const p=snap.val();if(!p||p.state!=='playing'||p.updatedBy===me?.uid)return;
       const expected=(p.time||0)+(Date.now()-p.updatedAt)/1000;
@@ -522,11 +602,16 @@ async function initWatchParty(){
       cont.appendChild(av);
     });
   });
-  // Watch chat for this room
+  // Watch chat for this room — text or voice notes
   _wpChatRef=db.ref(`watch_parties/${partyId}/chat`).orderByChild('timestamp').limitToLast(30).on('child_added',snap=>{
     const m=snap.val();const chat=$('wp-chat');if(!chat)return;
     const div=document.createElement('div');div.className='wp-msg';
-    div.innerHTML=`<span style="font-size:12px;font-weight:700;color:${m.uid===me?.uid?'var(--g)':'var(--blue)'};">${esc(getDisplayName(m.uid,m.username))}: </span>${esc(m.text||'')}`;
+    const nameSpan=`<span style="font-size:12px;font-weight:700;color:${m.uid===me?.uid?'var(--g)':'var(--blue)'};">${esc(getDisplayName(m.uid,m.username))}: </span>`;
+    if(m.voiceURL){
+      div.innerHTML=`${nameSpan}<audio controls src="${esc(m.voiceURL)}" style="height:28px;vertical-align:middle;max-width:180px;"></audio>`;
+    }else{
+      div.innerHTML=`${nameSpan}${esc(m.text||'')}`;
+    }
     chat.appendChild(div);chat.scrollTop=chat.scrollHeight;
   });
 }
@@ -560,9 +645,41 @@ function wpSendMsg(){
   db.ref(`watch_parties/${currentPartyId}/lastActivityAt`).set(now);
   inp.value='';
 }
+
+// ── VOICE NOTES IN WATCH PARTY CHAT ──────────────────────────────
+let wpMRec=null,wpAChunks=[],wpIsRec=false,wpRecTimer=null;
+async function toggleWpVoiceRec(){
+  if(!me||!currentPartyId)return;
+  if(wpIsRec){wpMRec?.stop();return;}
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    wpAChunks=[];wpMRec=new MediaRecorder(stream);wpIsRec=true;
+    const btn=$('wp-voice-btn');if(btn){btn.innerHTML='<i class="fa-solid fa-stop"></i>';btn.style.background='var(--red)';btn.style.color='#fff';}
+    toast(`🔴 Recording… max ${WP_VOICE_MAX_SEC}s`,'info');
+    wpMRec.ondataavailable=e=>wpAChunks.push(e.data);
+    wpMRec.onstop=async()=>{
+      wpIsRec=false;stream.getTracks().forEach(t=>t.stop());
+      clearTimeout(wpRecTimer);wpRecTimer=null;
+      const btn=$('wp-voice-btn');if(btn){btn.innerHTML='<i class="fa-solid fa-microphone"></i>';btn.style.background='var(--s2)';btn.style.color='var(--g)';}
+      const blob=new Blob(wpAChunks,{type:'audio/webm'});
+      if(blob.size<500||!currentPartyId)return; // too short/empty, or left the room mid-recording — don't send
+      toast('Sending voice note…','info');
+      try{
+        const url=await uploadCld(new File([blob],'wp-voice.webm',{type:'audio/webm'}));
+        const now=Date.now();
+        db.ref(`watch_parties/${currentPartyId}/chat`).push({uid:me.uid,username:me.username,text:'',voiceURL:url,timestamp:now});
+        db.ref(`watch_parties/${currentPartyId}/lastActivityAt`).set(now);
+      }catch{toast('Voice note upload failed','error');}
+    };
+    wpMRec.start();
+    wpRecTimer=setTimeout(()=>{if(wpIsRec)wpMRec.stop();},WP_VOICE_MAX_SEC*1000);
+  }catch{wpIsRec=false;toast('Microphone access denied','error');}
+}
+
 function leaveWatchParty(){
   const partyId=currentPartyId;
   _wpActive=false;_wpCurrentYtId=null;
+  if(wpIsRec&&wpMRec){wpMRec.stop();} // don't leave a stray recording running
   if(partyId){
     if(_wpVideoListenerRef){db.ref(`watch_parties/${partyId}/video`).off();_wpVideoListenerRef=null;}
     if(_wpPlaybackListenerRef){db.ref(`watch_parties/${partyId}/playback`).off();_wpPlaybackListenerRef=null;}
@@ -572,7 +689,9 @@ function leaveWatchParty(){
   }
   if(_wpSyncInterval){clearInterval(_wpSyncInterval);_wpSyncInterval=null;}
   if(wpPlayer&&typeof wpPlayer.destroy==='function'){wpPlayer.destroy();wpPlayer=null;}
+  _wpPlayerReady=false;_wpPlayerReadyPromise=null;_wpPlayerReadyResolve=null;
   const ph=$('wp-yt-placeholder');if(ph)ph.style.display='flex';
+  const loading=$('wp-loading');if(loading)loading.style.display='none';
   const chat=$('wp-chat');if(chat)chat.innerHTML='';
   const viewersCont=$('wp-viewers');if(viewersCont)viewersCont.querySelectorAll('[data-uid]').forEach(e=>e.remove());
   currentPartyId=null;
