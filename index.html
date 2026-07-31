@@ -163,7 +163,7 @@
         </div>
       </div>
       <button onclick="openModal('comm-rules-modal')" style="color:var(--t2);font-size:18px;" title="Community Rules"><i class="fa-solid fa-shield-halved"></i></button>
-      <button onclick="openWatchParty()" style="color:var(--t2);font-size:18px;" title="Watch Party"><i class="fa-solid fa-clapperboard"></i></button>
+      <button onclick="openWatchPartyHub()" style="color:var(--t2);font-size:18px;" title="Watch Party"><i class="fa-solid fa-clapperboard"></i></button>
       <button onclick="openModal('msg-search-modal')" style="color:var(--t2);font-size:18px;"><i class="fa-solid fa-magnifying-glass"></i></button>
       <button onclick="openModal('pin-modal');loadPinned('global')" style="color:var(--t2);font-size:18px;"><i class="fa-solid fa-thumbtack"></i></button>
     </div>
@@ -328,7 +328,7 @@
           <i class="fa-solid fa-bookmark" style="font-size:22px;color:var(--blue);"></i>
           <span style="font-size:11px;color:var(--t2);">Saved Posts</span>
         </button>
-        <button onclick="openModal('watch-party-modal');initWatchParty()" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 16px;background:var(--s2);border-radius:14px;flex:1;min-width:70px;">
+        <button onclick="openWatchPartyHub()" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 16px;background:var(--s2);border-radius:14px;flex:1;min-width:70px;">
           <i class="fa-solid fa-clapperboard" style="font-size:22px;color:var(--purple);"></i>
           <span style="font-size:11px;color:var(--t2);">Watch Party</span>
         </button>
@@ -537,11 +537,41 @@
 </div></div>
 
 <!-- ══ WATCH PARTY ══ -->
+<!-- ══ WATCH PARTY HUB — list of your parties, replaces jumping straight into one shared room ══ -->
+<div id="watch-party-hub-modal" class="modal-bg hidden" onclick="if(event.target===this)closeModal('watch-party-hub-modal')">
+<div class="modal-box" style="max-height:88vh;overflow-y:auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span style="font-size:17px;font-weight:700;color:var(--t1);">🎬 Watch Parties</span>
+    <button onclick="closeModal('watch-party-hub-modal')" style="color:var(--t2);font-size:26px;">×</button>
+  </div>
+  <button onclick="createWatchPartyStart()" style="width:100%;padding:12px;background:var(--g);border-radius:12px;font-weight:700;color:#fff;margin-bottom:16px;"><i class="fa-solid fa-plus" style="margin-right:6px;"></i>Create New Watch Party</button>
+  <div id="wp-hub-pending"></div>
+  <div id="wp-hub-active"></div>
+  <div id="wp-hub-empty" class="hidden" style="text-align:center;color:var(--t2);font-size:13px;padding:24px;">No watch parties yet. Create one and invite your friends 🎬</div>
+</div></div>
+
+<!-- ══ WATCH PARTY INVITE PICKER — reused for both creating a new party and inviting more people into an existing one ══ -->
+<div id="wp-invite-modal" class="modal-bg hidden" onclick="if(event.target===this)closeModal('wp-invite-modal')">
+<div class="modal-box" style="max-height:88vh;overflow-y:auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span id="wp-invite-title" style="font-size:17px;font-weight:700;color:var(--t1);">Invite Contacts</span>
+    <button onclick="closeModal('wp-invite-modal')" style="color:var(--t2);font-size:26px;">×</button>
+  </div>
+  <p style="font-size:12px;color:var(--t2);margin-bottom:12px;">Only people you've saved as a contact can be invited directly.</p>
+  <div id="wp-invite-list" style="max-height:50vh;overflow-y:auto;margin-bottom:14px;"></div>
+  <button onclick="confirmWatchPartyInvite()" style="width:100%;padding:13px;background:var(--g);border-radius:12px;font-weight:700;color:#fff;">Send Invites</button>
+</div></div>
+
 <div id="watch-party-modal" class="modal-bg hidden" onclick="if(event.target===this)leaveWatchParty()">
 <div class="modal-box" style="padding:0;overflow:hidden;max-height:92vh;">
   <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.06);">
-    <span style="font-size:16px;font-weight:700;color:var(--t1);">🎬 Watch Party</span>
-    <button onclick="leaveWatchParty()" style="color:var(--t2);font-size:24px;">×</button>
+    <div style="min-width:0;">
+      <div style="font-size:16px;font-weight:700;color:var(--t1);">🎬 <span id="wp-room-title">Watch Party</span></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <button onclick="inviteMoreToWatchParty()" style="color:var(--g);font-size:14px;" title="Invite more people"><i class="fa-solid fa-user-plus"></i></button>
+      <button onclick="leaveWatchParty()" style="color:var(--t2);font-size:24px;">×</button>
+    </div>
   </div>
   <!-- YouTube embed — a real YT.Player gets attached here by JS, replacing this div, so playback can be controlled/synced programmatically -->
   <div style="background:#000;position:relative;padding-bottom:56.25%;flex-shrink:0;">

@@ -147,6 +147,7 @@ function openNotifCenter(){
         closeModal('notif-center-modal');
         if(n.type==='follow'&&n.fromUid)viewUserProfile(n.fromUid);
         else if(n.type==='like'||n.type==='comment')switchTab('feed');
+        else if(n.type==='watch_party')openWatchPartyHub();
         else if(n.fromUid)db.ref(`users/${n.fromUid}`).once('value').then(s=>{const u=s.val()||{};openPrivate(n.fromUid,u.username||'User',u.mkjNumber||'',u.photoURL||'');});
       };
       list.appendChild(div);
@@ -288,9 +289,13 @@ async function loadExplore(tab){
 // ══════════════════════════════════════════════════════════════════
 // FEATURE 4: WATCH PARTY (YouTube sync via Firebase)
 // ══════════════════════════════════════════════════════════════════
-let _wpChatRef=null;let _wpActive=false;const WP_ROOM='main';
+// ══ WATCH PARTY — private, invite-only rooms per friend group ══════
+let _wpChatRef=null;let _wpActive=false;let currentPartyId=null;
 let wpPlayer=null;let _wpApplyingRemote=false;let _wpCurrentYtId=null;let _wpVideoListenerRef=null;let _wpPlaybackListenerRef=null;let _wpSyncInterval=null;
 let _wpApiLoadPromise=null;
+let _wpInviteMode='create'; // 'create' (new party) or 'invite-more' (adding people to an existing one)
+const WP_STALE_MS=30*60*1000; // a party with no activity for 30 minutes is treated as closed
+
 function loadYTApi(){
   if(window.YT&&window.YT.Player)return Promise.resolve();
   if(_wpApiLoadPromise)return _wpApiLoadPromise;
@@ -303,12 +308,162 @@ function loadYTApi(){
   });
   return _wpApiLoadPromise;
 }
-function openWatchParty(){openModal('watch-party-modal');initWatchParty();}
+
+// ── HUB — list of your parties, pending invites, and create button ──
+function openWatchPartyHub(){
+  if(!me)return toast('Login required','error');
+  openModal('watch-party-hub-modal');
+  loadWatchPartyHub();
+}
+async function loadWatchPartyHub(){
+  const pendingCont=$('wp-hub-pending');const activeCont=$('wp-hub-active');const emptyMsg=$('wp-hub-empty');
+  if(!pendingCont||!activeCont)return;
+  pendingCont.innerHTML='';activeCont.innerHTML='';
+  if(emptyMsg)emptyMsg.classList.add('hidden');
+  const idxSnap=await db.ref(`user_watch_parties/${me.uid}`).once('value');
+  const partyIds=Object.keys(idxSnap.val()||{});
+  if(!partyIds.length){if(emptyMsg)emptyMsg.classList.remove('hidden');return;}
+  let anyShown=false;
+  for(const partyId of partyIds){
+    try{
+      const [partySnap,inviteSnap]=await Promise.all([
+        db.ref(`watch_parties/${partyId}`).once('value'),
+        db.ref(`watch_parties/${partyId}/invites/${me.uid}`).once('value')
+      ]);
+      const party=partySnap.val();const myInvite=inviteSnap.val();
+      if(!party||!myInvite)continue; // party or our invite was removed
+      const lastActive=party.lastActivityAt||party.createdAt||0;
+      const isStale=(Date.now()-lastActive)>WP_STALE_MS;
+      if(isStale){
+        // Quietly drop our own reference to a closed party — doesn't need to block the list rendering
+        db.ref(`user_watch_parties/${me.uid}/${partyId}`).remove();
+        continue;
+      }
+      anyShown=true;
+      if(myInvite.status==='pending'){
+        const row=document.createElement('div');row.className='ci';row.style.cssText='background:var(--s2);border-radius:12px;margin-bottom:8px;flex-direction:column;align-items:stretch;gap:8px;padding:12px;';
+        row.innerHTML=`<div style="font-size:14px;color:var(--t1);"><strong>${esc(getDisplayName(myInvite.invitedBy,myInvite.invitedByName))}</strong> invited you to a Watch Party</div>
+          <div style="display:flex;gap:8px;">
+            <button data-accept style="flex:1;padding:9px;background:var(--g);border-radius:8px;color:#fff;font-weight:700;font-size:13px;">Accept</button>
+            <button data-decline style="flex:1;padding:9px;background:var(--s1);border-radius:8px;color:var(--t2);font-weight:700;font-size:13px;">Decline</button>
+          </div>`;
+        row.querySelector('[data-accept]').onclick=()=>acceptWatchPartyInvite(partyId);
+        row.querySelector('[data-decline]').onclick=()=>declineWatchPartyInvite(partyId);
+        pendingCont.appendChild(row);
+      }else if(myInvite.status==='accepted'){
+        const row=document.createElement('div');row.className='ci';row.style.cursor='pointer';
+        row.innerHTML=`<div style="width:44px;height:44px;border-radius:12px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:20px;">🎬</div>
+          <div style="flex:1;min-width:0;"><div style="font-weight:600;color:var(--t1);font-size:14px;">${esc(getDisplayName(party.createdBy,party.createdByName))}'s Watch Party</div><div style="font-size:12px;color:var(--t2);">Tap to join</div></div>`;
+        row.onclick=()=>{closeModal('watch-party-hub-modal');joinWatchParty(partyId);};
+        activeCont.appendChild(row);
+      }
+    }catch(e){ /* couldn't load this one — skip it rather than break the whole list */ }
+  }
+  if(!anyShown&&emptyMsg)emptyMsg.classList.remove('hidden');
+}
+
+// ── CREATE / INVITE (shared contact picker) ─────────────────────
+function createWatchPartyStart(){
+  if(!me)return toast('Login required','error');
+  _wpInviteMode='create';
+  const title=$('wp-invite-title');if(title)title.textContent='Create Watch Party';
+  buildWatchPartyInviteList();
+  openModal('wp-invite-modal');
+}
+function inviteMoreToWatchParty(){
+  if(!currentPartyId)return;
+  _wpInviteMode='invite-more';
+  const title=$('wp-invite-title');if(title)title.textContent='Invite More People';
+  buildWatchPartyInviteList();
+  openModal('wp-invite-modal');
+}
+function buildWatchPartyInviteList(){
+  const list=$('wp-invite-list');if(!list)return;
+  list.innerHTML='';
+  const entries=Object.entries(_contacts);
+  if(!entries.length){
+    list.innerHTML='<div style="font-size:13px;color:var(--t2);padding:12px;">You have no saved contacts yet. Save someone from their profile first.</div>';
+    return;
+  }
+  entries.forEach(([uid,c])=>{
+    const row=document.createElement('label');
+    row.style.cssText='display:flex;align-items:center;gap:10px;padding:8px 4px;font-size:14px;color:var(--t1);cursor:pointer;';
+    const cb=document.createElement('input');cb.type='checkbox';cb.dataset.uid=uid;cb.className='wp-invite-cb';
+    row.appendChild(cb);
+    const span=document.createElement('span');span.textContent=c.savedName||c.username||'User';
+    row.appendChild(span);
+    list.appendChild(row);
+  });
+}
+async function confirmWatchPartyInvite(){
+  const checked=Array.from(document.querySelectorAll('.wp-invite-cb:checked')).map(cb=>cb.dataset.uid);
+  if(!checked.length)return toast('Pick at least one person to invite','error');
+  closeModal('wp-invite-modal');
+  if(_wpInviteMode==='create'){
+    await createWatchPartyWithInvites(checked);
+  }else{
+    await sendWatchPartyInvites(currentPartyId,checked);
+    toast('Invites sent 🎬','success');
+  }
+}
+async function createWatchPartyWithInvites(inviteeUids){
+  if(!me)return;
+  const partyRef=db.ref('watch_parties').push();
+  const partyId=partyRef.key;
+  const now=Date.now();
+  await partyRef.set({createdBy:me.uid,createdByName:me.username,createdAt:now,lastActivityAt:now});
+  // Creator is auto-accepted into their own party
+  await db.ref(`watch_parties/${partyId}/invites/${me.uid}`).set({username:me.username,photoURL:me.photoURL||'',status:'accepted',invitedBy:me.uid,invitedByName:me.username,timestamp:now});
+  await db.ref(`user_watch_parties/${me.uid}/${partyId}`).set(true);
+  await sendWatchPartyInvites(partyId,inviteeUids);
+  toast('Watch Party created 🎬','success');
+  joinWatchParty(partyId);
+}
+async function sendWatchPartyInvites(partyId,inviteeUids){
+  if(!me||!partyId)return;
+  const now=Date.now();
+  for(const uid of inviteeUids){
+    const c=_contacts[uid]||{};
+    await db.ref(`watch_parties/${partyId}/invites/${uid}`).set({username:c.username||'',photoURL:'',status:'pending',invitedBy:me.uid,invitedByName:me.username,timestamp:now});
+    await db.ref(`user_watch_parties/${uid}/${partyId}`).set(true);
+    db.ref(`notifications/${uid}`).push({type:'watch_party',fromUid:me.uid,fromName:me.username,fromPhoto:me.photoURL||'',partyId,timestamp:now});
+  }
+  // Bump activity so the party doesn't immediately look stale right after inviting more people
+  db.ref(`watch_parties/${partyId}/lastActivityAt`).set(now);
+}
+async function acceptWatchPartyInvite(partyId){
+  if(!me)return;
+  await db.ref(`watch_parties/${partyId}/invites/${me.uid}/status`).set('accepted');
+  closeModal('watch-party-hub-modal');
+  joinWatchParty(partyId);
+}
+async function declineWatchPartyInvite(partyId){
+  if(!me)return;
+  await db.ref(`watch_parties/${partyId}/invites/${me.uid}`).remove();
+  await db.ref(`user_watch_parties/${me.uid}/${partyId}`).remove();
+  toast('Invite declined','info');
+  loadWatchPartyHub();
+}
+
+// ── ACTIVE ROOM ──────────────────────────────────────────────────
+function joinWatchParty(partyId){
+  currentPartyId=partyId;
+  openModal('watch-party-modal');
+  initWatchParty();
+}
 async function initWatchParty(){
-  if(_wpActive||!me)return;_wpActive=true;
-  // Join room
-  db.ref(`watch_party/${WP_ROOM}/viewers/${me.uid}`).set({username:me.username,photoURL:me.photoURL||'',joinedAt:Date.now()});
-  db.ref(`watch_party/${WP_ROOM}/viewers/${me.uid}`).onDisconnect().remove();
+  if(_wpActive||!me||!currentPartyId)return;_wpActive=true;
+  const partyId=currentPartyId;
+
+  db.ref(`watch_parties/${partyId}`).once('value').then(s=>{
+    const p=s.val();if(!p)return;
+    const title=$('wp-room-title');if(title)title.textContent=`${getDisplayName(p.createdBy,p.createdByName)}'s Watch Party`;
+  });
+
+  const joinNow=Date.now();
+  db.ref(`watch_parties/${partyId}/viewers/${me.uid}`).set({username:me.username,photoURL:me.photoURL||'',joinedAt:joinNow});
+  db.ref(`watch_parties/${partyId}/viewers/${me.uid}`).onDisconnect().remove();
+  db.ref(`watch_parties/${partyId}/lastActivityAt`).set(joinNow);
 
   await loadYTApi();
   if(!wpPlayer){
@@ -321,8 +476,8 @@ async function initWatchParty(){
     });
   }
 
-  // Watch for a new video being loaded by anyone
-  _wpVideoListenerRef=db.ref(`watch_party/${WP_ROOM}/video`).on('value',snap=>{
+  // Watch for a new video being loaded by anyone in this room
+  _wpVideoListenerRef=db.ref(`watch_parties/${partyId}/video`).on('value',snap=>{
     const v=snap.val();if(!v||!v.url)return;
     const ytId=extractYTId(v.url);
     if(!ytId||ytId===_wpCurrentYtId)return;
@@ -334,7 +489,7 @@ async function initWatchParty(){
   });
 
   // Watch the shared play/pause/seek state and mirror it locally
-  _wpPlaybackListenerRef=db.ref(`watch_party/${WP_ROOM}/playback`).on('value',snap=>{
+  _wpPlaybackListenerRef=db.ref(`watch_parties/${partyId}/playback`).on('value',snap=>{
     const p=snap.val();if(!p||!wpPlayer||typeof wpPlayer.seekTo!=='function')return;
     if(p.updatedBy===me.uid)return; // don't react to our own broadcast
     const elapsed=p.state==='playing'?(Date.now()-p.updatedAt)/1000:0;
@@ -347,8 +502,8 @@ async function initWatchParty(){
 
   // Periodic drift correction — every 5s, nudge back in sync if more than 2s off
   _wpSyncInterval=setInterval(()=>{
-    if(!wpPlayer||typeof wpPlayer.getCurrentTime!=='function')return;
-    db.ref(`watch_party/${WP_ROOM}/playback`).once('value').then(snap=>{
+    if(!wpPlayer||typeof wpPlayer.getCurrentTime!=='function'||currentPartyId!==partyId)return;
+    db.ref(`watch_parties/${partyId}/playback`).once('value').then(snap=>{
       const p=snap.val();if(!p||p.state!=='playing'||p.updatedBy===me?.uid)return;
       const expected=(p.time||0)+(Date.now()-p.updatedAt)/1000;
       const actual=wpPlayer.getCurrentTime();
@@ -356,57 +511,71 @@ async function initWatchParty(){
     });
   },5000);
 
-  // Watch viewers
-  db.ref(`watch_party/${WP_ROOM}/viewers`).on('value',snap=>{
+  // Watch viewers currently in this room
+  db.ref(`watch_parties/${partyId}/viewers`).on('value',snap=>{
     const cont=$('wp-viewers');if(!cont)return;
     const viewers=snap.val()||{};
     const existing=cont.querySelectorAll('[data-uid]');existing.forEach(e=>e.remove());
     Object.entries(viewers).forEach(([uid,v])=>{
       const av=document.createElement('div');av.dataset.uid=uid;av.style.cssText='display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0;';
-      av.innerHTML=`<img src="${esc(v.photoURL||avUrl(v.username||'U'))}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid ${uid===me?.uid?'var(--g)':'var(--s2)'};"><span style="font-size:9px;color:var(--t2);max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(v.username||'User')}</span>`;
+      av.innerHTML=`<img src="${esc(v.photoURL||avUrl(v.username||'U'))}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid ${uid===me?.uid?'var(--g)':'var(--s2)'};"><span style="font-size:9px;color:var(--t2);max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(getDisplayName(uid,v.username))}</span>`;
       cont.appendChild(av);
     });
   });
-  // Watch chat
-  _wpChatRef=db.ref(`watch_party/${WP_ROOM}/chat`).orderByChild('timestamp').limitToLast(30).on('child_added',snap=>{
+  // Watch chat for this room
+  _wpChatRef=db.ref(`watch_parties/${partyId}/chat`).orderByChild('timestamp').limitToLast(30).on('child_added',snap=>{
     const m=snap.val();const chat=$('wp-chat');if(!chat)return;
     const div=document.createElement('div');div.className='wp-msg';
-    div.innerHTML=`<span style="font-size:12px;font-weight:700;color:${m.uid===me?.uid?'var(--g)':'var(--blue)'};">${esc(m.username||'User')}: </span>${esc(m.text||'')}`;
+    div.innerHTML=`<span style="font-size:12px;font-weight:700;color:${m.uid===me?.uid?'var(--g)':'var(--blue)'};">${esc(getDisplayName(m.uid,m.username))}: </span>${esc(m.text||'')}`;
     chat.appendChild(div);chat.scrollTop=chat.scrollHeight;
   });
 }
 function wpOnPlayerStateChange(e){
-  if(_wpApplyingRemote||!me||!wpPlayer)return; // this change came from a remote sync, not a real local tap — don't re-broadcast it
+  if(_wpApplyingRemote||!me||!wpPlayer||!currentPartyId)return; // remote sync, not a real local tap — don't re-broadcast it
+  const partyId=currentPartyId;
   const state=e.data;
+  const now=Date.now();
   if(state===YT.PlayerState.PLAYING){
-    db.ref(`watch_party/${WP_ROOM}/playback`).set({state:'playing',time:wpPlayer.getCurrentTime(),updatedAt:Date.now(),updatedBy:me.uid});
+    db.ref(`watch_parties/${partyId}/playback`).set({state:'playing',time:wpPlayer.getCurrentTime(),updatedAt:now,updatedBy:me.uid});
+    db.ref(`watch_parties/${partyId}/lastActivityAt`).set(now);
   }else if(state===YT.PlayerState.PAUSED){
-    db.ref(`watch_party/${WP_ROOM}/playback`).set({state:'paused',time:wpPlayer.getCurrentTime(),updatedAt:Date.now(),updatedBy:me.uid});
+    db.ref(`watch_parties/${partyId}/playback`).set({state:'paused',time:wpPlayer.getCurrentTime(),updatedAt:now,updatedBy:me.uid});
+    db.ref(`watch_parties/${partyId}/lastActivityAt`).set(now);
   }
 }
 function wpLoadVideo(){
-  const inp=$('wp-yt-inp');if(!inp||!inp.value.trim())return;
+  const inp=$('wp-yt-inp');if(!inp||!inp.value.trim()||!currentPartyId)return;
   const url=inp.value.trim();
   if(!extractYTId(url))return toast('Please paste a valid YouTube URL','error');
-  db.ref(`watch_party/${WP_ROOM}/video`).set({url,setBy:me?.uid,setByName:me?.username,timestamp:Date.now()});
-  db.ref(`watch_party/${WP_ROOM}/playback`).set({state:'playing',time:0,updatedAt:Date.now(),updatedBy:me?.uid});
+  const now=Date.now();
+  db.ref(`watch_parties/${currentPartyId}/video`).set({url,setBy:me?.uid,setByName:me?.username,timestamp:now});
+  db.ref(`watch_parties/${currentPartyId}/playback`).set({state:'playing',time:0,updatedAt:now,updatedBy:me?.uid});
+  db.ref(`watch_parties/${currentPartyId}/lastActivityAt`).set(now);
   inp.value='';toast('Video loaded for everyone 🎬','success');
 }
 function wpSendMsg(){
-  const inp=$('wp-msg-inp');if(!inp||!inp.value.trim()||!me)return;
-  db.ref(`watch_party/${WP_ROOM}/chat`).push({uid:me.uid,username:me.username,text:inp.value.trim(),timestamp:Date.now()});
+  const inp=$('wp-msg-inp');if(!inp||!inp.value.trim()||!me||!currentPartyId)return;
+  const now=Date.now();
+  db.ref(`watch_parties/${currentPartyId}/chat`).push({uid:me.uid,username:me.username,text:inp.value.trim(),timestamp:now});
+  db.ref(`watch_parties/${currentPartyId}/lastActivityAt`).set(now);
   inp.value='';
 }
 function leaveWatchParty(){
+  const partyId=currentPartyId;
   _wpActive=false;_wpCurrentYtId=null;
-  if(_wpVideoListenerRef){db.ref(`watch_party/${WP_ROOM}/video`).off();_wpVideoListenerRef=null;}
-  if(_wpPlaybackListenerRef){db.ref(`watch_party/${WP_ROOM}/playback`).off();_wpPlaybackListenerRef=null;}
-  if(_wpChatRef){db.ref(`watch_party/${WP_ROOM}/chat`).off();_wpChatRef=null;}
-  db.ref(`watch_party/${WP_ROOM}/viewers`).off();
-  if(me)db.ref(`watch_party/${WP_ROOM}/viewers/${me.uid}`).remove();
+  if(partyId){
+    if(_wpVideoListenerRef){db.ref(`watch_parties/${partyId}/video`).off();_wpVideoListenerRef=null;}
+    if(_wpPlaybackListenerRef){db.ref(`watch_parties/${partyId}/playback`).off();_wpPlaybackListenerRef=null;}
+    if(_wpChatRef){db.ref(`watch_parties/${partyId}/chat`).off();_wpChatRef=null;}
+    db.ref(`watch_parties/${partyId}/viewers`).off();
+    if(me)db.ref(`watch_parties/${partyId}/viewers/${me.uid}`).remove();
+  }
   if(_wpSyncInterval){clearInterval(_wpSyncInterval);_wpSyncInterval=null;}
   if(wpPlayer&&typeof wpPlayer.destroy==='function'){wpPlayer.destroy();wpPlayer=null;}
   const ph=$('wp-yt-placeholder');if(ph)ph.style.display='flex';
+  const chat=$('wp-chat');if(chat)chat.innerHTML='';
+  const viewersCont=$('wp-viewers');if(viewersCont)viewersCont.querySelectorAll('[data-uid]').forEach(e=>e.remove());
+  currentPartyId=null;
   closeModal('watch-party-modal');
 }
 function extractYTId(url){
