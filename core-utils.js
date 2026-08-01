@@ -713,7 +713,7 @@ function checkSched(){
   const now=Date.now();let changed=false;
   scheduledMsgs=scheduledMsgs.filter(s=>{
     if(s.sendAt<=now&&me){
-      const m={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text:s.msg,time:ts(),timestamp:Date.now(),type:'text',scheduled:true};
+      const m={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text:s.msg,time:ts(),timestamp:Date.now(),type:'text',scheduled:true,lang:getMyPreferredLanguage()};
       if(s.chatType==='global'){
         db.ref('global_chat').push(m);
         toast(`📅 Scheduled message sent to Community`,'success');
@@ -862,13 +862,17 @@ async function callTranslateFunction(text,sourceLang,targetLang){
 }
 
 // Main entry point for translating one message. Checks cache first (see point 5/6 of the spec:
-// never re-call the API once a message+language has been translated), otherwise looks up the
-// sender's preferred language as the source, calls the API, and caches the result.
-// Throws on any failure so callers can show "Translation unavailable."
-async function translateMessageText(messageId,text,senderUid,targetLang){
+// never re-call the API once a message+language has been translated), otherwise uses the sender's
+// language as stamped on the message itself (msg.lang, set when THEY sent it, from their own
+// preferred-language setting — this avoids needing to read another user's profile out of Firebase,
+// which can silently fail under normal security rules and was the root cause of translations only
+// working when the sender happened to be on English). Falls back to the old cross-user lookup only
+// for messages sent before this fix that don't have msg.lang yet. Throws on failure so callers can
+// show "Translation unavailable."
+async function translateMessageText(messageId,text,msg,targetLang){
   const cached=await getCachedTranslation(messageId,targetLang);
   if(cached)return cached;
-  const sourceLang=await getUserPreferredLanguage(senderUid);
+  const sourceLang=msg.lang||await getUserPreferredLanguage(msg.uid); // msg.lang covers all new messages; old messages fall back
   const translated=await callTranslateFunction(text,sourceLang,targetLang);
   cacheTranslation(messageId,targetLang,translated);
   return translated;

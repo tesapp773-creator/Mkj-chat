@@ -799,7 +799,7 @@ async function startSpaceNow(type){
   await db.ref('spaces/main').set({
     status:'live',type:type||_spacesData?.type||'audio',hostUid:me.uid,hostName:me.username,startedAt:Date.now()
   });
-  db.ref('global_chat').push({uid:me.uid,username:'MKJ Spaces',mkjNumber:'',photoURL:me.photoURL||'',text:'🎙 A MKJ Space just went live! Tap MKJ Spaces to join.',time:ts(),timestamp:Date.now(),type:'text'});
+  db.ref('global_chat').push({uid:me.uid,username:'MKJ Spaces',mkjNumber:'',photoURL:me.photoURL||'',text:'🎙 A MKJ Space just went live! Tap MKJ Spaces to join.',time:ts(),timestamp:Date.now(),type:'text',lang:'en'});
   joinSpacesSession();
 }
 

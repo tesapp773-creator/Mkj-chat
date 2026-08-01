@@ -231,7 +231,7 @@ async function toggleInlineTranslation(key,chatType,msg){
   box.textContent='Translating…';
   btn.textContent='Hide Translation';
   try{
-    box.textContent=await translateMessageText(key,msg.text||'',msg.uid,targetLang);
+    box.textContent=await translateMessageText(key,msg.text||'',msg,targetLang);
   }catch(err){
     box.textContent='Translation unavailable.'; // graceful failure — original message stays fully visible above
   }
@@ -383,7 +383,7 @@ function sendGlobal(){
   if(!isCEO())return toast('📢 Official announcements only','info');
   const inp=$('g-inp'),text=inp.value.trim();if(!text||!me)return;if(!checkRate())return;
   hideMentionBox();
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text'};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',lang:getMyPreferredLanguage()};
   if(replyData.global){msg.replyTo=replyData.global;clearReply('global');}
   if(disappearSetting)msg.disappearAt=Date.now()+disappearSetting*1000;
   db.ref('global_chat').push(msg);inp.value='';inp.style.height='auto';
@@ -395,7 +395,7 @@ async function sendPrivate(){
   const inp=$('p-inp'),text=inp.value.trim();if(!text||!chatId||!chatTarget||!me)return;if(!checkRate())return;
   const blocked=await isBlockedByTarget();if(blocked)return toast('You are blocked by this user','error');
   hideMentionBox();
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text'};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',lang:getMyPreferredLanguage()};
   if(replyData.private){msg.replyTo=replyData.private;clearReply('private');}
   if(disappearSetting)msg.disappearAt=Date.now()+disappearSetting*1000;
   sendToRef('private',msg,text);
@@ -412,7 +412,7 @@ async function sendGroup(){
     if(myRole!=='admin'&&myRole!=='moderator')return toast('📢 Only admins/moderators can post','info');
   }
   hideMentionBox();
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text'};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',lang:getMyPreferredLanguage()};
   if(replyData.group){msg.replyTo=replyData.group;clearReply('group');}
   db.ref(`group_messages/${curGid}`).push(msg);inp.value='';inp.style.height='auto';$('ai-row-grp').classList.add('hidden');earnPoints(1,'message');onInpChange('grp-inp','ai-row-grp');
   clearTimeout(typTimers.group);db.ref(`typing/group/${curGid}/${me.uid}`).remove();
@@ -1113,7 +1113,7 @@ async function sendChannelPost(){
   const snap=await db.ref(`channels/${curChannelId}/createdBy`).once('value');
   if(snap.val()!==me.uid&&!isCEO())return toast('Only the channel owner can post','error');
   const inp=$('ch-post-inp');const text=inp.value.trim();if(!text)return;
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text'};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',lang:getMyPreferredLanguage()};
   db.ref(`channel_posts/${curChannelId}`).push(msg);
   inp.value='';inp.style.height='auto';toast('Posted ✓','success');
 }
@@ -1147,7 +1147,7 @@ async function sendGroupAnnouncement(){
   const myRole=await getMyGroupRole();
   if(myRole!=='admin'&&myRole!=='moderator')return toast('Only admins/moderators can post announcements','error');
   const text=prompt('Announcement text:');if(!text?.trim())return;
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text:text.trim(),time:ts(),timestamp:Date.now(),type:'text',isAnnouncement:true};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text:text.trim(),time:ts(),timestamp:Date.now(),type:'text',isAnnouncement:true,lang:getMyPreferredLanguage()};
   db.ref(`group_messages/${curGid}`).push(msg);toast('Announcement posted 📢','success');
 }
 

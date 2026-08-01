@@ -498,7 +498,10 @@ async function runTranslate(){
   try{
     // Now calls our own NVIDIA-backed Netlify Function instead of the third-party mymemory API.
     // Source language is guessed from the message sender's saved preference (falls back to English).
-    const sourceLang=await getUserPreferredLanguage(pickerMsg?.uid);
+    // Uses the message's own stamped language (set by the sender's client from their own setting)
+    // instead of reading another user's profile out of Firebase, which requires cross-user read
+    // permissions that may not be granted by the app's security rules.
+    const sourceLang=pickerMsg?.lang||await getUserPreferredLanguage(pickerMsg?.uid);
     if(xr)xr.textContent=await callTranslateFunction(_xlateMsg,sourceLang,lang);
   }catch(e){if(xr)xr.textContent='Translation unavailable.';}
 }
@@ -694,7 +697,7 @@ function sendAnonPost(){
   const text=$('anon-inp')?.value.trim();
   if(!text)return toast('Write something first','error');
   if(!me)return toast('Not logged in','error');
-  const msg={uid:me.uid,username:'Anonymous 🎭',mkjNumber:'',photoURL:'https://ui-avatars.com/api/?background=7C3AED&color=fff&bold=true&size=128&name=?',text,time:ts(),timestamp:Date.now(),type:'text',isAnon:true,realUid:me.uid};
+  const msg={uid:me.uid,username:'Anonymous 🎭',mkjNumber:'',photoURL:'https://ui-avatars.com/api/?background=7C3AED&color=fff&bold=true&size=128&name=?',text,time:ts(),timestamp:Date.now(),type:'text',isAnon:true,realUid:me.uid,lang:getMyPreferredLanguage()};
   db.ref('global_chat').push(msg);
   $('anon-inp').value='';closeModal('anon-modal');
   toast('Posted anonymously 🎭','success');

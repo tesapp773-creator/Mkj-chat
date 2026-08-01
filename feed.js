@@ -491,7 +491,7 @@ function getTypingLabel(uid,chatType){
 // ══ FEATURE J: AUTO-DELETE AFTER READ ═════════════════════════════
 function sendAutoDeleteMsg(text,chatType){
   if(!me)return;
-  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',autoDelete:true};
+  const msg={uid:me.uid,username:me.username,mkjNumber:me.mkjNumber,photoURL:me.photoURL,text,time:ts(),timestamp:Date.now(),type:'text',autoDelete:true,lang:getMyPreferredLanguage()};
   if(chatType==='private'&&chatId)db.ref(`private_chats/${chatId}`).push(msg);
   else if(chatType==='group'&&curGid)db.ref(`group_messages/${curGid}`).push(msg);
   toast('Message will delete after read 👁','info');
