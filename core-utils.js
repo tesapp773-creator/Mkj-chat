@@ -843,6 +843,8 @@ function cacheTranslation(messageId,targetLang,translatedText){
 // Calls our own Netlify Function, which proxies nvidia/riva-translate-4b-instruct-v2.
 // Confirmed contract: POST {text, sourceLanguage, targetLanguage} -> {translation}.
 async function callTranslateFunction(text,sourceLang,targetLang){
+  console.log('[translate] sending request ->',{sourceLang,targetLang}); // still logged, in case DevTools is used later
+  toast(`Translating ${sourceLang} → ${targetLang}`,'info'); // TEMP DEBUG: on-screen so it's visible without DevTools on a phone
   const res=await fetch('/.netlify/functions/translate',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -867,18 +869,28 @@ async function translateMessageText(messageId,text,senderUid,targetLang){
   return translated;
 }
 
-// Fills every <select class="lang-select"> on the page with the full supported-language list.
-// Called once on app boot so the Settings selector and both legacy modal selectors all stay in sync.
-function populateLanguageSelects(){
+// Fills every <select class="lang-select"> with the full supported-language list, binds its change
+// listener in JS (more reliable across mobile browsers/WebViews than relying on inline onchange alone),
+// and loads the user's saved target language into the Settings dropdown. Safe to call more than once —
+// called at app boot AND every time the Profile/Settings view opens, so a failure in one unrelated
+// boot-time function can never permanently prevent this from initializing.
+function initTranslationUI(){
   document.querySelectorAll('select.lang-select').forEach(sel=>{
-    sel.innerHTML=TRANSLATE_LANGUAGES.map(([code,label])=>`<option value="${code}">${esc(label)}</option>`).join('');
+    // Only rebuild options if empty, so re-calling this doesn't wipe a select mid-interaction.
+    if(!sel.options.length){
+      sel.innerHTML=TRANSLATE_LANGUAGES.map(([code,label])=>`<option value="${code}">${esc(label)}</option>`).join('');
+    }
   });
-}
-
-// Loads the saved preferred-language setting into the Settings dropdown when the Profile view opens.
-function loadTranslationSettings(){
   const sel=$('translate-lang-setting');
-  if(sel)sel.value=getMyPreferredLanguage();
+  if(sel){
+    sel.value=getMyPreferredLanguage(); // reflect the currently saved choice
+    // Bind in JS (in addition to the inline onchange in index.html) so the save fires even in
+    // environments where inline event attributes on <select> are unreliable.
+    sel.onchange=()=>{
+      toast(`Setting saved: ${sel.value}`,'info'); // TEMP DEBUG: confirms the change actually registered
+      setMyPreferredLanguage(sel.value);
+    };
+  }
 }
 
 // ══ LEGACY TRANSLATE MODAL (kept working, now backed by the NVIDIA function) ══

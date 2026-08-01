@@ -226,6 +226,7 @@ async function toggleInlineTranslation(key,chatType,msg){
 
   // Toggle ON: show the loading state immediately, then fetch (or read from cache).
   const targetLang=getMyPreferredLanguage();
+  toast(`Target language: ${targetLang}`,'info'); // TEMP DEBUG: confirms what was actually read from storage
   box.classList.remove('hidden');
   box.textContent='Translating…';
   btn.textContent='Hide Translation';
