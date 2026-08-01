@@ -18,6 +18,11 @@ firebase.initializeApp({
   measurementId:"G-77NTD2PVZZ"
 });
 const auth=firebase.auth(),db=firebase.database();
+// TEMP DEBUG: show any uncaught JS error as an on-screen toast, since DevTools isn't available on phone.
+// Safe to remove once the blank-chat-list issue is identified and fixed.
+window.addEventListener('error',e=>{
+  if(typeof toast==='function')toast(`JS Error: ${e.message} (${e.filename?.split('/').pop()}:${e.lineno})`,'error');
+});
 const GP=new firebase.auth.GoogleAuthProvider();
 GP.addScope('email');GP.addScope('profile');
 
