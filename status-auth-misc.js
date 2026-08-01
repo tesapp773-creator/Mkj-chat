@@ -284,7 +284,7 @@ function showView(v){
   }
   $('bottom-nav').style.display=['private','group','channel','feed'].includes(v)?'none':'flex';
   if(v==='global'){gUnread=0;[$('g-badge'),$('g-nb')].forEach(b=>{if(b){b.classList.add('hidden');b.textContent='0';}});scrollBottom('global-msgs');applyCommunityMode();}
-  if(v==='profile'){loadPrivToggles();updateProfileCompletion();buildFAQ();renderProfileCEOBtn();renderProfileHighlights();loadTranslationSettings();}
+  if(v==='profile'){loadPrivToggles();updateProfileCompletion();buildFAQ();renderProfileCEOBtn();renderProfileHighlights();try{initTranslationUI();}catch(e){console.error('Translation UI init failed:',e);}}
 }
 function switchTab(tab){
   curTab=tab;
@@ -417,7 +417,8 @@ auth.onAuthStateChanged(async user=>{
         db.ref(`users/${me.uid}/lastSeen`).onDisconnect().set(firebase.database.ServerValue.TIMESTAMP);
       }
     });
-    buildEmojiGrid();buildFAQ();buildBgSwatches();loadPrivToggles();updateProfileCompletion();setVH();populateLanguageSelects();loadTranslationSettings();
+    try{initTranslationUI();}catch(e){console.error('Translation UI init failed:',e);} // isolated so nothing else can silently block it
+    buildEmojiGrid();buildFAQ();buildBgSwatches();loadPrivToggles();updateProfileCompletion();setVH();
     loadContacts();loadConvs();loadGlobal();loadStatuses();loadGroups();loadChannels();applyCommunityMode();checkInviteParam();
     startOnlineCounter();updateStreak();checkBirthdays();startNotifListener();checkDeepLinkParam();listenIncomingCalls();
     earnPoints(5,'daily_login');addSpacesBtn();watchSpacesStatus();
