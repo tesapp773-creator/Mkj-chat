@@ -765,15 +765,130 @@ function sendFwd(targetUid){
   closeModal('forward-modal');toast('Forwarded ✓','success');
 }
 
-// ══ TRANSLATE ════════════════════════════════════════════════════
+// ══ TRANSLATE (NVIDIA-powered, via our own Netlify Function) ══════
+// This is the ONE translation engine used app-wide: by the inline "🌐 Translate"
+// button under received messages, by the long-press picker's "Translate" action,
+// and by the legacy modal entry points below (kept working, now on the real backend).
+
+// Full list of languages supported by the NVIDIA translation model behind
+// netlify/functions/translate.js. [code, human-readable label] pairs, used to
+// build every language <select> in the app (Settings, and the legacy modals).
+const TRANSLATE_LANGUAGES=[
+  ['en','English'],['ar','Arabic'],['bg','Bulgarian'],['zh-CN','Chinese (Simplified)'],
+  ['zh-TW','Chinese (Traditional)'],['hr','Croatian'],['cs','Czech'],['da','Danish'],
+  ['nl','Dutch'],['et','Estonian'],['fi','Finnish'],['fr','French'],['de','German'],
+  ['el','Greek'],['hi','Hindi'],['hu','Hungarian'],['id','Indonesian'],['it','Italian'],
+  ['ja','Japanese'],['ko','Korean'],['lv','Latvian'],['lt','Lithuanian'],['no','Norwegian'],
+  ['pl','Polish'],['pt-BR','Portuguese (Brazil)'],['pt-PT','Portuguese (Portugal)'],
+  ['ro','Romanian'],['ru','Russian'],['sk','Slovak'],['sl','Slovenian'],
+  ['es-ES','Spanish (Spain)'],['es-US','Spanish (Latin America)'],['sv','Swedish'],
+  ['th','Thai'],['tr','Turkish'],['uk','Ukrainian'],['vi','Vietnamese']
+];
+
+// In-memory cache for this browser session only: fastest lookup, cleared on page reload.
+// Keyed as "messageId:targetLang" -> translated string. This is layer 1 of the 3-layer cache.
+const _translationMemCache={};
+
+// Read the current user's saved translation target language (localStorage = instant, no network).
+// Defaults to English if the user has never opened Settings > Translation.
+function getMyPreferredLanguage(){
+  return localStorage.getItem('preferred_language')||'en';
+}
+
+// Save the current user's preferred language: to localStorage (instant local reads) AND to
+// Firebase under users/{uid}/preferredLanguage (so it syncs across devices, and so OTHER users'
+// clients can look it up as a guess for "what language did this sender write in").
+function setMyPreferredLanguage(lang){
+  localStorage.setItem('preferred_language',lang);
+  if(me?.uid)db.ref(`users/${me.uid}/preferredLanguage`).set(lang).catch(()=>{});
+  toast('Translation language updated','success');
+}
+
+// Look up any user's preferred language from Firebase (used as the translation "source language"
+// guess for messages they sent). Falls back to English if that user never set a preference.
+async function getUserPreferredLanguage(uid){
+  if(!uid)return 'en';
+  try{
+    const snap=await db.ref(`users/${uid}/preferredLanguage`).once('value');
+    return snap.val()||'en';
+  }catch{return 'en';} // offline / permission error -> just assume English rather than failing the whole translation
+}
+
+// Check all 3 cache layers, cheapest first, for an existing translation.
+// Returns the cached string, or null if this exact message+language has never been translated before.
+async function getCachedTranslation(messageId,targetLang){
+  const cacheKey=`${messageId}:${targetLang}`;
+  if(_translationMemCache[cacheKey])return _translationMemCache[cacheKey]; // layer 1: memory (this tab, this session)
+  const lsVal=localStorage.getItem(`xlate_${cacheKey}`); // layer 2: localStorage (this device, persists across reloads)
+  if(lsVal){_translationMemCache[cacheKey]=lsVal;return lsVal;}
+  try{
+    // layer 3: Firebase — shared across ALL users, so if anyone has already translated this
+    // exact message into this language, nobody else ever has to call the paid/rate-limited API for it again.
+    const snap=await db.ref(`translations/${messageId}/${targetLang}`).once('value');
+    const fbVal=snap.val();
+    if(fbVal){_translationMemCache[cacheKey]=fbVal;localStorage.setItem(`xlate_${cacheKey}`,fbVal);return fbVal;}
+  }catch{/* Firebase unreachable or rules block the read — fall through and call the API instead */}
+  return null;
+}
+
+// Write a freshly-translated string into all 3 cache layers so this exact
+// message+language combination never triggers another API call, from anyone.
+function cacheTranslation(messageId,targetLang,translatedText){
+  const cacheKey=`${messageId}:${targetLang}`;
+  _translationMemCache[cacheKey]=translatedText;
+  localStorage.setItem(`xlate_${cacheKey}`,translatedText);
+  if(db)db.ref(`translations/${messageId}/${targetLang}`).set(translatedText).catch(()=>{}); // best-effort; ok if it fails
+}
+
+// Calls our own Netlify Function, which proxies nvidia/riva-translate-4b-instruct-v2.
+// Confirmed contract: POST {text, sourceLanguage, targetLanguage} -> {translation}.
+async function callTranslateFunction(text,sourceLang,targetLang){
+  const res=await fetch('/.netlify/functions/translate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text,sourceLanguage:sourceLang,targetLanguage:targetLang})
+  });
+  const data=await res.json();
+  if(!res.ok)throw new Error(data.error||`Translate function returned HTTP ${res.status}`);
+  if(!data.translation)throw new Error('Translate function response had no translation field');
+  return data.translation;
+}
+
+// Main entry point for translating one message. Checks cache first (see point 5/6 of the spec:
+// never re-call the API once a message+language has been translated), otherwise looks up the
+// sender's preferred language as the source, calls the API, and caches the result.
+// Throws on any failure so callers can show "Translation unavailable."
+async function translateMessageText(messageId,text,senderUid,targetLang){
+  const cached=await getCachedTranslation(messageId,targetLang);
+  if(cached)return cached;
+  const sourceLang=await getUserPreferredLanguage(senderUid);
+  const translated=await callTranslateFunction(text,sourceLang,targetLang);
+  cacheTranslation(messageId,targetLang,translated);
+  return translated;
+}
+
+// Fills every <select class="lang-select"> on the page with the full supported-language list.
+// Called once on app boot so the Settings selector and both legacy modal selectors all stay in sync.
+function populateLanguageSelects(){
+  document.querySelectorAll('select.lang-select').forEach(sel=>{
+    sel.innerHTML=TRANSLATE_LANGUAGES.map(([code,label])=>`<option value="${code}">${esc(label)}</option>`).join('');
+  });
+}
+
+// Loads the saved preferred-language setting into the Settings dropdown when the Profile view opens.
+function loadTranslationSettings(){
+  const sel=$('translate-lang-setting');
+  if(sel)sel.value=getMyPreferredLanguage();
+}
+
+// ══ LEGACY TRANSLATE MODAL (kept working, now backed by the NVIDIA function) ══
 function openTranslate(text){xlateText=text;$('xlate-orig').textContent=text;$('xlate-result').style.display='none';openModal('translate-modal');}
 async function doTranslate(){
   const lang=$('xlate-lang').value,box=$('xlate-result');
   box.textContent='Translating…';box.style.display='block';
   try{
-    const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(xlateText)}&langpair=auto|${lang}`);
-    const d=await r.json();box.textContent=d.responseData?.translatedText||'Translation not available';
-  }catch{box.textContent='Translation failed. Check internet.';}
+    box.textContent=await callTranslateFunction(xlateText,getMyPreferredLanguage(),lang);
+  }catch{box.textContent='Translation unavailable.';}
 }
 
 // ══ REPORT ═══════════════════════════════════════════════════════

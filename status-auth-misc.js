@@ -284,7 +284,7 @@ function showView(v){
   }
   $('bottom-nav').style.display=['private','group','channel','feed'].includes(v)?'none':'flex';
   if(v==='global'){gUnread=0;[$('g-badge'),$('g-nb')].forEach(b=>{if(b){b.classList.add('hidden');b.textContent='0';}});scrollBottom('global-msgs');applyCommunityMode();}
-  if(v==='profile'){loadPrivToggles();updateProfileCompletion();buildFAQ();renderProfileCEOBtn();renderProfileHighlights();}
+  if(v==='profile'){loadPrivToggles();updateProfileCompletion();buildFAQ();renderProfileCEOBtn();renderProfileHighlights();loadTranslationSettings();}
 }
 function switchTab(tab){
   curTab=tab;
@@ -417,7 +417,7 @@ auth.onAuthStateChanged(async user=>{
         db.ref(`users/${me.uid}/lastSeen`).onDisconnect().set(firebase.database.ServerValue.TIMESTAMP);
       }
     });
-    buildEmojiGrid();buildFAQ();buildBgSwatches();loadPrivToggles();updateProfileCompletion();setVH();
+    buildEmojiGrid();buildFAQ();buildBgSwatches();loadPrivToggles();updateProfileCompletion();setVH();populateLanguageSelects();loadTranslationSettings();
     loadContacts();loadConvs();loadGlobal();loadStatuses();loadGroups();loadChannels();applyCommunityMode();checkInviteParam();
     startOnlineCounter();updateStreak();checkBirthdays();startNotifListener();checkDeepLinkParam();listenIncomingCalls();
     earnPoints(5,'daily_login');addSpacesBtn();watchSpacesStatus();
@@ -495,16 +495,17 @@ async function runTranslate(){
   const lang=$('translator-lang-sel').value;
   const xr=$('translator-result-box');if(xr)xr.textContent='Translating…';
   try{
-    const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(_xlateMsg)}&langpair=auto|${lang}`);
-    const d=await r.json();
-    const result=d.responseData?.translatedText||d.matches?.[0]?.translation||'Could not translate';
-    if(xr)xr.textContent=result;
-  }catch(e){if(xr)xr.textContent='Translation failed. Check your connection.';}
+    // Now calls our own NVIDIA-backed Netlify Function instead of the third-party mymemory API.
+    // Source language is guessed from the message sender's saved preference (falls back to English).
+    const sourceLang=await getUserPreferredLanguage(pickerMsg?.uid);
+    if(xr)xr.textContent=await callTranslateFunction(_xlateMsg,sourceLang,lang);
+  }catch(e){if(xr)xr.textContent='Translation unavailable.';}
 }
-// Patch ep-xlate to use new translator modal
+// NOTE: the old "patch ep-xlate on DOMContentLoaded" block that used to live here has been removed.
+// It only ever ran once at page load, so showPicker() (which re-assigns ep-xlate's handler on
+// EVERY long-press, in chat-messaging.js) would silently undo it after the first use — that was
+// the root cause of the Translate button not working. The fix now lives directly inside showPicker().
 document.addEventListener('DOMContentLoaded',()=>{
-  const btn=$('ep-xlate');
-  if(btn)btn.onclick=()=>{if(pickerMsg?.text)openTranslatorModal(pickerMsg.text);hidePicker();};
   initFeedPullToRefresh();
 });
 function initFeedPullToRefresh(){

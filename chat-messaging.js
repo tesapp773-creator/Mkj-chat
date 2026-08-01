@@ -111,7 +111,9 @@ function showPicker(e,key,chatType,msg){
   $('ep-star').onclick=()=>{starMsg(msg,key,chatType);hidePicker();};
   $('ep-fwd').onclick=()=>{openForward(msg);hidePicker();};
   $('ep-pin').onclick=()=>{pinMsg(msg,key,chatType);hidePicker();};
-  $('ep-xlate').onclick=()=>{openTranslate(msg.text||'');hidePicker();};
+  // Long-press "Translate" now drives the SAME inline toggle as the button under the message
+  // (see toggleInlineTranslation below), instead of opening the old separate modal.
+  $('ep-xlate').onclick=()=>{toggleInlineTranslation(key,chatType,msg);hidePicker();};
   $('ep-report').onclick=()=>{openReport(msg);hidePicker();};
   const isOwn=msg.uid===me?.uid;
   $('ep-del').style.display=isOwn?'flex':'none';
@@ -202,6 +204,38 @@ function addDoubleTap(el,key,chatType){
   },{passive:true});
 }
 
+// ══ INLINE MESSAGE TRANSLATION (WhatsApp-style show/hide under the bubble) ══
+// Single translate flow for the whole app: called by the per-message "🌐 Translate"
+// button AND by the long-press picker's "Translate" quick action, so there is only
+// one code path to maintain and only one place the "already loaded" cache is checked.
+async function toggleInlineTranslation(key,chatType,msg){
+  // Find this message's bubble in whichever chat list is currently on screen.
+  const wrap=document.querySelector(`[data-key="${CSS.escape(key)}"]`);
+  if(!wrap){toast('Message not visible on screen','info');return;}
+  const btn=wrap.querySelector('.xlate-btn');
+  const box=wrap.querySelector('.xlate-box');
+  if(!btn||!box){toast('Nothing to translate','info');return;} // e.g. a media message with no text button rendered
+
+  const alreadyShown=!box.classList.contains('hidden');
+  if(alreadyShown){
+    // Toggle OFF: just hide the translation, no network call needed (point 8 of the spec).
+    box.classList.add('hidden');
+    btn.textContent='🌐 Translate';
+    return;
+  }
+
+  // Toggle ON: show the loading state immediately, then fetch (or read from cache).
+  const targetLang=getMyPreferredLanguage();
+  box.classList.remove('hidden');
+  box.textContent='Translating…';
+  btn.textContent='Hide Translation';
+  try{
+    box.textContent=await translateMessageText(key,msg.text||'',msg.uid,targetLang);
+  }catch(err){
+    box.textContent='Translation unavailable.'; // graceful failure — original message stays fully visible above
+  }
+}
+
 // ══ MESSAGE RENDERER ══════════════════════════════════════════════
 function makeMsgCore(msg,isMe,key,chatType,reactions,searchQ){
   const now=Date.now();
@@ -278,6 +312,22 @@ function makeMsgCore(msg,isMe,key,chatType,reactions,searchQ){
     ${isMe?`<span style="font-size:11px;color:${msg.readBy?'var(--blue)':'rgba(255,255,255,.4)'};">✓✓</span>`:''}
   </div>`;
   bubble.innerHTML=html;
+  // ══ TRANSLATE BUTTON (received plain-text messages only) ══════════
+  // Never shown for our own outgoing messages (spec: never auto-translate or offer to translate
+  // what WE sent) and only for plain text (msg.type is unset) — media/poll/etc. have nothing to translate.
+  if(!isMe&&!msg.type){
+    const xlateBtn=document.createElement('button');
+    xlateBtn.className='xlate-btn';           // styled in style.css to look like WhatsApp's translate link
+    xlateBtn.textContent='🌐 Translate';
+    xlateBtn.onclick=(e)=>{
+      e.stopPropagation();                    // don't trigger the bubble's long-press/reply handlers
+      toggleInlineTranslation(key,chatType,msg);
+    };
+    const xlateBox=document.createElement('div');
+    xlateBox.className='xlate-box hidden';     // hidden until the button is tapped
+    bubble.appendChild(xlateBtn);
+    bubble.appendChild(xlateBox);
+  }
   // Long press
   let pt=null;
   bubble.addEventListener('touchstart',e=>{pt=setTimeout(()=>showPicker(e,key,chatType,msg),550);},{passive:true});
