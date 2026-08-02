@@ -4,19 +4,39 @@ function timestamp() {
   return new Date().toISOString();
 }
 
-function info(...args) {
-  if (!CONFIG.ENABLE_LOGGING) return;
-  console.log(`[INFO] ${timestamp()}`, ...args);
+function format(level, requestId, message) {
+  if (requestId) {
+    return `[${level}] ${timestamp()} [${requestId}] ${message}`;
+  }
+
+  return `[${level}] ${timestamp()} ${message}`;
 }
 
-function warn(...args) {
+function info(requestId, ...args) {
   if (!CONFIG.ENABLE_LOGGING) return;
-  console.warn(`[WARN] ${timestamp()}`, ...args);
+
+  console.log(
+    format("INFO", requestId, ""),
+    ...args
+  );
 }
 
-function error(...args) {
+function warn(requestId, ...args) {
   if (!CONFIG.ENABLE_LOGGING) return;
-  console.error(`[ERROR] ${timestamp()}`, ...args);
+
+  console.warn(
+    format("WARN", requestId, ""),
+    ...args
+  );
+}
+
+function error(requestId, ...args) {
+  if (!CONFIG.ENABLE_LOGGING) return;
+
+  console.error(
+    format("ERROR", requestId, ""),
+    ...args
+  );
 }
 
 module.exports = {
