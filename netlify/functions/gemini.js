@@ -27,19 +27,36 @@ function isRetryableStatus(status) {
   return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
-function extractGeminiText(data) {
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+function extractGeminiText(data, requestId) {
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+  if (!text) {
+    // Helps tell apart the different reasons Gemini can come back empty
+    // (safety block, hit max tokens, etc.) next time this happens.
+    const finishReason = data?.candidates?.[0]?.finishReason;
+    const blockReason = data?.promptFeedback?.blockReason;
+    logger.warn(requestId, `Gemini returned no text (finishReason=${finishReason || "n/a"}, blockReason=${blockReason || "n/a"})`);
+  }
+
+  return text;
 }
 
 function safeJsonParse(text) {
+  // Defensive backstop: strip a ```json ... ``` or ``` ... ``` wrapper if the
+  // model adds one despite responseMimeType being set to application/json.
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+
   try {
-    return JSON.parse(text);
+    return JSON.parse(cleaned);
   } catch {
     return null;
   }
 }
 
-async function callGemini(requestId, prompt, timeoutMs) {
+async function callGemini(requestId, prompt, timeoutMs, generationConfig = {}) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -75,6 +92,15 @@ async function callGemini(requestId, prompt, timeoutMs) {
                 ],
               },
             ],
+            // Gemini 2.5 models "think" before answering by default, and
+            // those invisible thinking tokens can eat the whole output
+            // budget, leaving an empty final answer. Translation/detection
+            // don't need reasoning, so thinking is switched off for
+            // consistent, fast responses.
+            generationConfig: {
+              thinkingConfig: { thinkingBudget: 0 },
+              ...generationConfig,
+            },
           }),
         }
       );
@@ -95,7 +121,7 @@ async function callGemini(requestId, prompt, timeoutMs) {
       }
 
       const data = await response.json();
-      const text = extractGeminiText(data);
+      const text = extractGeminiText(data, requestId);
 
       if (!text) {
         throw new Error(ERRORS.INVALID_RESPONSE);
@@ -130,7 +156,8 @@ async function translateWithGemini(requestId, text, targetLanguage) {
   const raw = await callGemini(
     requestId,
     prompt,
-    getTimeout("TRANSLATION", 15000)
+    getTimeout("TRANSLATION", 15000),
+    { responseMimeType: "application/json" }
   );
 
   const parsed = safeJsonParse(raw);
