@@ -3,6 +3,20 @@ async function translateWithMyMemory(
   sourceLanguage,
   targetLanguage
 ) {
+  // Same language on both sides: nothing to translate, and asking MyMemory to do it
+  // triggers its own internal error text ("PLEASE SELECT TWO DISTINCT LANGUAGES!"),
+  // which — before this fix — got returned to users as if it were a real translation.
+  if (sourceLanguage === targetLanguage) {
+    return {
+      success: true,
+      provider: "mymemory",
+      detectedLanguage: sourceLanguage,
+      targetLanguage,
+      needsTranslation: false,
+      translation: message
+    };
+  }
+
   const params = new URLSearchParams({
     q: message,
     langpair: `${sourceLanguage}|${targetLanguage}`
@@ -23,6 +37,13 @@ async function translateWithMyMemory(
 
   if (!translation) {
     throw new Error("MyMemory returned no translation.");
+  }
+
+  // MyMemory returns HTTP 200 even on internal failures, stuffing an error string into
+  // translatedText instead of a real translation (daily quota hit, bad langpair, etc).
+  // Catch those here so they never reach a user looking like real translated text.
+  if (/MYMEMORY WARNING|QUOTA|INVALID LANGPAIR|PLEASE SELECT|AMOUNT OF WORDS/i.test(translation)) {
+    throw new Error(`MyMemory error: ${translation}`);
   }
 
   return {
