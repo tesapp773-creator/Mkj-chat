@@ -49,14 +49,6 @@ exports.handler = async (event) => {
 
   const { text, sourceLanguage, targetLanguage } = body;
 
-  // Cheap shortcut: sender's saved language already matches the target.
-  // Harmless even if that saved value is occasionally stale — the only risk
-  // is skipping a translation that turns out to already match anyway, which
-  // is exactly what Gemini would have returned unchanged too (see the "if
-  // already in target language, return unchanged" rule in prompts.js).
-  if (sourceLanguage && sourceLanguage === targetLanguage) {
-    return response.success(requestId, { translation: text });
-  }
 
   try {
     const result = await translateWithGemini(requestId, text, targetLanguage);
