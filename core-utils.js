@@ -753,10 +753,20 @@ function openForward(msg){
     });
   });
 }
-function sendFwd(targetUid){
+async function sendFwd(targetUid){
   if(!fwdMsg||!targetUid||!me)return;
   const fCid=[me.uid,targetUid].sort().join('_');
-  const m={...fwdMsg,uid:me.uid,username:me.username,time:ts(),timestamp:Date.now(),forwarded:true};
+  // Resolve and permanently bake in the ORIGINAL author's language before we overwrite uid below.
+  // Forwarding doesn't change the message TEXT, so the language it was written in must travel
+  // with it — otherwise (if fwdMsg.lang was ever missing) a later translation would fall back to
+  // getUserPreferredLanguage(msg.uid), which after this line is the FORWARDER's uid, not the
+  // original author's. That meant a forwarded message's "source language" silently tracked
+  // whatever the forwarder's OWN Settings happened to say at the moment someone translated it —
+  // changing every time the forwarder changed their own preference, which is exactly the
+  // es-ES-then-yo flip-flop seen for the same never-actually-Spanish, never-actually-Yoruba
+  // French message.
+  const resolvedLang=fwdMsg.lang||await getUserPreferredLanguage(fwdMsg.uid);
+  const m={...fwdMsg,uid:me.uid,username:me.username,time:ts(),timestamp:Date.now(),forwarded:true,lang:resolvedLang};
   delete m.replyTo;
   const preview=m.text||'[forwarded media]';
   db.ref(`private_chats/${fCid}`).push(m);
