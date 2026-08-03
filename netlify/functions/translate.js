@@ -1,14 +1,20 @@
 // netlify/functions/translate.js
 //
-// The single translation endpoint the app calls: POST /.netlify/functions/translate
-// with { text, sourceLanguage, targetLanguage } -> { translation }.
+// Single translation endpoint: POST /.netlify/functions/translate
+// { text, sourceLanguage, targetLanguage } -> { translation }
 //
-// Primary path: Gemini (gemini.js + prompts.js). Gemini detects the source
-// language itself and covers every language in languages.js in one call.
+// Primary path: Gemini (gemini.js + prompts.js) detects the source language
+// AND translates in one call. That's the cheapest and most accurate path,
+// so it's used for every request that isn't a same-language shortcut.
 //
-// Fallback path: MyMemory (mymemory.js), free and keyless, used automatically
-// if Gemini errors out (missing/invalid key, quota, timeout, bad JSON back)
-// and CONFIG.ENABLE_MYMEMORY_FALLBACK is true.
+// If that call fails (network error, timeout, bad JSON back, Gemini down),
+// we do NOT blindly trust the frontend's sourceLanguage for the MyMemory
+// fallback — it's really just the sender's saved preferred-language setting
+// (see core-utils.js), not a check of this specific message. Instead we run
+// a dedicated, lightweight detectLanguage() call to get a real answer, and
+// only fall back to the frontend-supplied sourceLanguage if that detection
+// call ALSO fails. This only costs an extra call on the failure path —
+// normal, successful translations still cost exactly one Gemini call.
 
 const CONFIG = require("./config");
 const ERRORS = require("./errors");
@@ -18,7 +24,7 @@ const response = require("./response");
 const { validate } = require("./validator");
 const { cleanTranslation } = require("./utils");
 const { generateRequestId } = require("./requestId");
-const { translateWithGemini } = require("./gemini");
+const { translateWithGemini, detectLanguage } = require("./gemini");
 const { translateWithMyMemory } = require("./mymemory");
 
 exports.handler = async (event) => {
@@ -43,7 +49,11 @@ exports.handler = async (event) => {
 
   const { text, sourceLanguage, targetLanguage } = body;
 
-  // Nothing to do if sender and receiver already share a language.
+  // Cheap shortcut: sender's saved language already matches the target.
+  // Harmless even if that saved value is occasionally stale — the only risk
+  // is skipping a translation that turns out to already match anyway, which
+  // is exactly what Gemini would have returned unchanged too (see the "if
+  // already in target language, return unchanged" rule in prompts.js).
   if (sourceLanguage && sourceLanguage === targetLanguage) {
     return response.success(requestId, { translation: text });
   }
@@ -62,8 +72,7 @@ exports.handler = async (event) => {
   } catch (geminiErr) {
     logger.warn(requestId, `Gemini failed: ${geminiErr.message}`);
 
-    // No fallback configured, or we don't know the source language MyMemory needs.
-    if (!CONFIG.ENABLE_MYMEMORY_FALLBACK || !sourceLanguage) {
+    if (!CONFIG.ENABLE_MYMEMORY_FALLBACK) {
       return response.error(
         requestId,
         CONSTANTS.HTTP.BAD_GATEWAY,
@@ -71,15 +80,30 @@ exports.handler = async (event) => {
       );
     }
 
+    // Get a real detected language for the fallback instead of trusting
+    // whatever the frontend guessed. Only runs because Gemini's translation
+    // call already failed, so this doesn't add cost to the normal path.
+    let fallbackSourceLanguage = sourceLanguage || null;
     try {
-      const fallback = await translateWithMyMemory(text, sourceLanguage, targetLanguage);
+      const detected = await detectLanguage(requestId, text);
+      if (detected) fallbackSourceLanguage = detected;
+    } catch (detectErr) {
+      logger.warn(requestId, `Language detection also failed: ${detectErr.message}`);
+    }
+
+    if (!fallbackSourceLanguage) {
+      return response.error(requestId, CONSTANTS.HTTP.BAD_GATEWAY, ERRORS.TRANSLATION_FAILED);
+    }
+
+    try {
+      const fallback = await translateWithMyMemory(text, fallbackSourceLanguage, targetLanguage);
 
       logger.info(requestId, "MyMemory fallback ok");
 
       return response.success(requestId, {
         translation: cleanTranslation(fallback.translation) || text,
         provider: CONSTANTS.PROVIDERS.MYMEMORY,
-        detectedLanguage: sourceLanguage
+        detectedLanguage: fallbackSourceLanguage
       });
     } catch (fallbackErr) {
       logger.error(requestId, `MyMemory fallback also failed: ${fallbackErr.message}`);
