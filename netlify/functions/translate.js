@@ -1,88 +1,89 @@
 // netlify/functions/translate.js
 //
-// Zero-cost translation backend for MKJ Chat, powered by the MyMemory
-// Translation API (https://mymemory.translated.net). Replaces the previous
-// NVIDIA riva-translate-4b-instruct-v2 backend, which only covered 36
-// non-English languages (no Yoruba, Igbo, Hausa, or other African languages)
-// and only translated reliably through English as a pivot — meaning a
-// direct French -> Spanish message would fail even though English -> French
-// worked fine. MyMemory translates any supported pair directly, no pivot.
+// The single translation endpoint the app calls: POST /.netlify/functions/translate
+// with { text, sourceLanguage, targetLanguage } -> { translation }.
 //
-// Contract is UNCHANGED so the front end needs no changes beyond the
-// language list: POST {text, sourceLanguage, targetLanguage} -> {translation}
+// Primary path: Gemini (gemini.js + prompts.js). Gemini detects the source
+// language itself and covers every language in languages.js in one call.
 //
-// Free tier: 5,000 words/day per IP with no signup at all. If you set the
-// MYMEMORY_EMAIL environment variable in Netlify (Site settings > Environment
-// variables) to any email address you control, MyMemory raises that to
-// 50,000 words/day, still completely free. No card, no key required either way.
+// Fallback path: MyMemory (mymemory.js), free and keyless, used automatically
+// if Gemini errors out (missing/invalid key, quota, timeout, bad JSON back)
+// and CONFIG.ENABLE_MYMEMORY_FALLBACK is true.
+
+const CONFIG = require("./config");
+const ERRORS = require("./errors");
+const CONSTANTS = require("./constants");
+const logger = require("./logger");
+const response = require("./response");
+const { validate } = require("./validator");
+const { cleanTranslation } = require("./utils");
+const { generateRequestId } = require("./requestId");
+const { translateWithGemini } = require("./gemini");
+const { translateWithMyMemory } = require("./mymemory");
 
 exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+  const requestId = generateRequestId();
+
+  if (event.httpMethod !== "POST") {
+    return response.error(requestId, CONSTANTS.HTTP.METHOD_NOT_ALLOWED, "Method not allowed");
   }
 
   let body;
   try {
-    body = JSON.parse(event.body || '{}');
+    body = JSON.parse(event.body || "{}");
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
+    return response.error(requestId, CONSTANTS.HTTP.BAD_REQUEST, ERRORS.INVALID_JSON);
+  }
+
+  try {
+    validate(body);
+  } catch (err) {
+    return response.error(requestId, CONSTANTS.HTTP.BAD_REQUEST, err.message);
   }
 
   const { text, sourceLanguage, targetLanguage } = body;
-  if (!text || !sourceLanguage || !targetLanguage) {
-    return {
-      statusCode: 400,
-      body: JSON.stringify({ error: 'text, sourceLanguage and targetLanguage are all required' })
-    };
+
+  // Nothing to do if sender and receiver already share a language.
+  if (sourceLanguage && sourceLanguage === targetLanguage) {
+    return response.success(requestId, { translation: text });
   }
-
-  // Nothing to do if sender and receiver use the same language.
-  if (sourceLanguage === targetLanguage) {
-    return { statusCode: 200, headers: JSON_HEADERS, body: JSON.stringify({ translation: text }) };
-  }
-
-  // MyMemory's free tier caps a single request around 500 bytes of source text.
-  // Chat messages are almost always well under that; we trim defensively so a
-  // huge paste doesn't just error out.
-  const trimmed = text.length > 490 ? text.slice(0, 490) : text;
-
-  const langpair = `${normalizeLang(sourceLanguage)}|${normalizeLang(targetLanguage)}`;
-  const params = new URLSearchParams({ q: trimmed, langpair });
-  if (process.env.MYMEMORY_EMAIL) params.set('de', process.env.MYMEMORY_EMAIL);
-
-  const url = `https://api.mymemory.translated.net/get?${params.toString()}`;
 
   try {
-    const res = await fetch(url);
-    const data = await res.json();
+    const result = await translateWithGemini(requestId, text, targetLanguage);
+    const translation = cleanTranslation(result?.translation) || text;
 
-    const translated = data?.responseData?.translatedText;
-    if (!translated) {
-      return { statusCode: 502, headers: JSON_HEADERS, body: JSON.stringify({ error: 'No translation returned from provider' }) };
+    logger.info(requestId, "Gemini translation ok");
+
+    return response.success(requestId, {
+      translation,
+      provider: CONSTANTS.PROVIDERS.GEMINI,
+      detectedLanguage: result?.detectedLanguage || sourceLanguage || null
+    });
+  } catch (geminiErr) {
+    logger.warn(requestId, `Gemini failed: ${geminiErr.message}`);
+
+    // No fallback configured, or we don't know the source language MyMemory needs.
+    if (!CONFIG.ENABLE_MYMEMORY_FALLBACK || !sourceLanguage) {
+      return response.error(
+        requestId,
+        CONSTANTS.HTTP.BAD_GATEWAY,
+        geminiErr.message || ERRORS.GEMINI_FAILED
+      );
     }
 
-    // MyMemory returns HTTP 200 even on internal errors, but stuffs an error
-    // string into translatedText instead (e.g. daily quota hit, bad langpair).
-    // Catch those so the app shows "Translation unavailable" instead of
-    // displaying the raw error text as if it were the translated message.
-    if (/MYMEMORY WARNING|QUOTA|INVALID LANGPAIR|PLEASE SELECT|AMOUNT OF WORDS/i.test(translated)) {
-      return { statusCode: 502, headers: JSON_HEADERS, body: JSON.stringify({ error: translated }) };
-    }
+    try {
+      const fallback = await translateWithMyMemory(text, sourceLanguage, targetLanguage);
 
-    return { statusCode: 200, headers: JSON_HEADERS, body: JSON.stringify({ translation: translated }) };
-  } catch (err) {
-    return { statusCode: 500, headers: JSON_HEADERS, body: JSON.stringify({ error: err.message || 'Translation request failed' }) };
+      logger.info(requestId, "MyMemory fallback ok");
+
+      return response.success(requestId, {
+        translation: cleanTranslation(fallback.translation) || text,
+        provider: CONSTANTS.PROVIDERS.MYMEMORY,
+        detectedLanguage: sourceLanguage
+      });
+    } catch (fallbackErr) {
+      logger.error(requestId, `MyMemory fallback also failed: ${fallbackErr.message}`);
+      return response.error(requestId, CONSTANTS.HTTP.BAD_GATEWAY, ERRORS.TRANSLATION_FAILED);
+    }
   }
 };
-
-const JSON_HEADERS = { 'Content-Type': 'application/json' };
-
-// MyMemory expects plain ISO 639-1 codes for most languages (en, fr, yo, ig,
-// ha...) but wants region-tagged codes for a few where the app already used
-// them (zh-CN, zh-TW, pt-BR, pt-PT, es-ES, es-US). This just passes those
-// through unchanged and leaves everything else as-is.
-function normalizeLang(code) {
-  const passthroughRegionCodes = ['zh-CN', 'zh-TW', 'pt-BR', 'pt-PT', 'es-ES', 'es-US'];
-  if (passthroughRegionCodes.includes(code)) return code;
-  return code;
-}
